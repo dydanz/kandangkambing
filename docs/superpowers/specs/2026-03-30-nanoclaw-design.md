@@ -307,7 +307,9 @@ CREATE INDEX idx_cost_timestamp ON cost_log(timestamp);
       "spec":      {"provider": "openai",    "model": "gpt-4o"},
       "simple":    {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
       "test":      {"provider": "anthropic", "model": "claude-sonnet-4-6"},
-      "summarise": {"provider": "google",    "model": "gemini-2.0-flash"}
+      "summarise": {"provider": "google",    "model": "gemini-2.0-flash"},
+      "test":      {"provider": "anthropic", "model": "claude-sonnet-4-6"}
+      // "test" reserved for a future TestAgent — not used by any current agent
     },
     "fallback_chain": [
       ["anthropic", "claude-sonnet-4-6"],
@@ -377,6 +379,8 @@ nanoclaw/
 ├── tools/     __init__.py
 ├── workflow/  __init__.py
 ├── memory/    __init__.py
+├── tests/
+│   └── conftest.py          # shared fixtures (settings stub, temp paths)
 └── logs/      .gitkeep
 ```
 
@@ -978,6 +982,9 @@ class PMAgent(BaseAgent):
     # PMAgent does NOT persist tasks — it returns JSON to WorkflowEngine.
     # WorkflowEngine calls _parse_tasks() then creates tasks via TaskStore.
     # This keeps PMAgent stateless and testable in isolation.
+    #
+    # No handle() override needed — BaseAgent.handle() is used directly.
+    # JSON output is enforced by the PM prompt (pm_prompt.md), not by code.
 ```
 
 **Skeleton — `agents/qa.py`:**
@@ -1077,7 +1084,7 @@ class WorkflowEngine:
         for attempt in range(max_retries + 1):
             await self._progress(
                 f"💻 Dev working on {task['id']} "
-                f"(attempt {attempt + 1}/{task['max_retries'] + 1})..."
+                f"(attempt {attempt + 1}/{max_retries + 1})..."
             )
             dev_result = await self.dev.implement(task, session_id)
 
@@ -1115,7 +1122,6 @@ class WorkflowEngine:
                             "reason": "rejected by user"}
 
             # QA failed — only increment if a subsequent attempt will follow
-            max_retries = task.get("max_retries", settings.workflow.max_retries)
             if attempt >= max_retries:
                 await self._progress(
                     f"⚠️ {task['id']} failed after {max_retries} retries. "
@@ -1294,7 +1300,6 @@ class BudgetGuard:
 ```python
 import asyncio
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo
 
 class DailyScheduler:
     def __init__(self, report_time: str, callback):
