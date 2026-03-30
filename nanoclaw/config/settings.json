@@ -1,0 +1,46 @@
+{
+  "discord": {
+    "allowed_user_ids": ["YOUR_DISCORD_USER_ID"],
+    "command_channel_id": "CHANNEL_ID",
+    "log_channel_id": "CHANNEL_ID",
+    "commits_channel_id": "CHANNEL_ID"
+  },
+  "workflow": {
+    "max_retries": 2,
+    "approval_timeout_minutes": 60,
+    "job_timeout_minutes": 10,
+    "max_concurrent_jobs": 2
+  },
+  "rate_limits": {
+    "llm_calls_per_hour": 30,
+    "claude_code_per_hour": 10,
+    "git_pushes_per_hour": 5,
+    "cooldown_minutes": 10
+  },
+  "budget": {
+    "daily_limit_usd": 5.00,
+    "warn_at_percent": 0.80,
+    "daily_report_time": "09:00"
+  },
+  "llm": {
+    "routing": {
+      "coding":    {"provider": "anthropic", "model": "claude-sonnet-4-6"},
+      "review":    {"provider": "anthropic", "model": "claude-sonnet-4-6"},
+      "spec":      {"provider": "openai",    "model": "gpt-4o"},
+      "simple":    {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
+      "test":      {"provider": "anthropic", "model": "claude-sonnet-4-6"},
+      "summarise": {"provider": "google",    "model": "gemini-2.0-flash"}
+    },
+    "fallback_chain": [
+      ["anthropic", "claude-sonnet-4-6"],
+      ["openai",    "gpt-4o"],
+      ["google",    "gemini-2.0-pro"],
+      ["anthropic", "claude-haiku-4-5-20251001"]
+    ]
+  },
+  "paths": {
+    "project_path": "/Users/yourusername/projects/yourproject",
+    "worktree_base": "/Users/yourusername/projects/worktrees",
+    "github_repo":   "yourname/yourproject"
+  }
+}
