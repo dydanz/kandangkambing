@@ -20,6 +20,10 @@ from agents.qa import QAAgent
 from workflow.engine import WorkflowEngine
 from workflow.approval_gate import ApprovalGate, APPROVE_EMOJI, REJECT_EMOJI
 from workflow.job_queue import JobQueue, Job
+from safety.auth import Auth
+from safety.rate_limiter import RateLimiter
+from safety.budget_guard import BudgetGuard
+from safety.scheduler import DailyScheduler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,13 +37,23 @@ class NanoClawBot:
 
     def __init__(self, settings: Settings):
         self.settings = settings
-        self._allowed_users = set(settings.discord.allowed_user_ids)
 
         # Discord client
         intents = discord.Intents.default()
         intents.message_content = True
         intents.reactions = True
         self.client = discord.Client(intents=intents)
+
+        # Safety
+        self.auth = Auth(settings.discord.allowed_user_ids)
+        self.rate_limiter = RateLimiter(
+            limits={
+                "llm_calls_per_hour": settings.rate_limits.llm_calls_per_hour,
+                "claude_code_per_hour": settings.rate_limits.claude_code_per_hour,
+                "git_pushes_per_hour": settings.rate_limits.git_pushes_per_hour,
+            },
+            cooldown_minutes=settings.rate_limits.cooldown_minutes,
+        )
 
         # Infrastructure
         self.memory = SharedMemory()
@@ -81,6 +95,13 @@ class NanoClawBot:
             max_retries=settings.workflow.max_retries,
         )
 
+        # Budget guard
+        self.budget_guard = BudgetGuard(
+            cost_tracker=self.cost_tracker,
+            daily_limit_usd=settings.budget.daily_limit_usd,
+            warn_at_percent=settings.budget.warn_at_percent,
+        )
+
         # Orchestrator (imported here to avoid circular)
         from orchestrator import Orchestrator
         self.orchestrator = Orchestrator(
@@ -88,6 +109,15 @@ class NanoClawBot:
             task_store=self.task_store,
             job_queue=self.job_queue,
             cost_tracker=self.cost_tracker,
+            rate_limiter=self.rate_limiter,
+            budget_guard=self.budget_guard,
+        )
+
+        # Daily scheduler
+        self.scheduler = DailyScheduler(
+            report_time=settings.budget.daily_report_time,
+            callback=self._post_daily_report,
+            on_day_reset=self.budget_guard.reset_daily_warning,
         )
 
         # Register event handlers
@@ -100,6 +130,7 @@ class NanoClawBot:
         async def on_ready():
             logger.info("NanoClaw online as %s", client.user)
             asyncio.create_task(self.job_queue.run())
+            asyncio.create_task(self.scheduler.run())
 
         @client.event
         async def on_message(message: discord.Message):
@@ -120,7 +151,7 @@ class NanoClawBot:
             return
 
         # Whitelist check — silent ignore for non-allowed users
-        if str(message.author.id) not in self._allowed_users:
+        if not self.auth.is_allowed(str(message.author.id)):
             logger.info("Ignored message from non-allowed user %s",
                         message.author.id)
             return
@@ -178,7 +209,7 @@ class NanoClawBot:
             return
 
         # Must be from allowed user
-        if str(user.id) not in self._allowed_users:
+        if not self.auth.is_allowed(str(user.id)):
             return
 
         # Check if this message is a pending approval
@@ -195,6 +226,27 @@ class NanoClawBot:
                 approved = emoji == APPROVE_EMOJI
                 self.approval_gate.resolve(task_id, approved)
                 break
+
+    async def _post_daily_report(self) -> None:
+        """Post daily cost/task report to the log channel."""
+        channel_id = self.settings.discord.log_channel_id
+        channel = self.client.get_channel(int(channel_id))
+        if not channel:
+            logger.warning("Log channel %s not found for daily report", channel_id)
+            return
+
+        daily_cost = await self.cost_tracker.daily_total()
+        tasks = await self.task_store.list_tasks()
+        done = sum(1 for t in tasks if t.get("status") == "done")
+        failed = sum(1 for t in tasks if t.get("status") == "failed")
+
+        report = (
+            f"**NanoClaw Daily Report**\n"
+            f"Tasks completed: {done} | Failed: {failed}\n"
+            f"LLM cost today: ${daily_cost:.2f} / "
+            f"${self.settings.budget.daily_limit_usd:.2f} limit"
+        )
+        await channel.send(report)
 
     @staticmethod
     def _is_task_command(command: str) -> bool:

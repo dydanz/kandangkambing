@@ -7,6 +7,8 @@ from memory.task_store import TaskStore
 from memory.cost_tracker import CostTracker
 from workflow.engine import WorkflowEngine
 from workflow.job_queue import JobQueue, Job
+from safety.rate_limiter import RateLimiter
+from safety.budget_guard import BudgetGuard
 
 logger = logging.getLogger("nanoclaw.orchestrator")
 
@@ -26,11 +28,15 @@ class Orchestrator:
     def __init__(self, engine: WorkflowEngine,
                  task_store: TaskStore,
                  job_queue: JobQueue,
-                 cost_tracker: CostTracker):
+                 cost_tracker: CostTracker,
+                 rate_limiter: RateLimiter | None = None,
+                 budget_guard: BudgetGuard | None = None):
         self.engine = engine
         self.task_store = task_store
         self.job_queue = job_queue
         self.cost_tracker = cost_tracker
+        self.rate_limiter = rate_limiter
+        self.budget_guard = budget_guard
 
     async def handle(self, command: str, user_id: str,
                      thread_id: Optional[str] = None,
@@ -53,6 +59,12 @@ class Orchestrator:
             return await self._handle_status()
         if keyword == "cost":
             return await self._handle_cost()
+
+        # Safety checks for work commands
+        if keyword in ("pm", "dev", "feature", "build", "implement"):
+            blocked = await self._check_safety_gates()
+            if blocked:
+                return blocked
 
         # PM commands
         if keyword == "pm" and len(parts) >= 2:
@@ -83,6 +95,20 @@ class Orchestrator:
                 )
 
         return self._usage()
+
+    async def _check_safety_gates(self) -> str | None:
+        """Run budget and rate limit checks. Returns error message or None."""
+        if self.budget_guard:
+            allowed, msg = await self.budget_guard.check()
+            if not allowed:
+                return msg
+
+        if self.rate_limiter:
+            allowed, msg = self.rate_limiter.check("llm_calls")
+            if not allowed:
+                return msg
+
+        return None
 
     async def _handle_pm_define(self, instruction: str,
                                 thread_id: Optional[str],
