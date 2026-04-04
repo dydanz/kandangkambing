@@ -2,9 +2,11 @@
 import asyncio
 import logging
 import os
+import subprocess
 import sys
 
 import discord
+import openai
 
 from config.settings import Settings
 from memory.shared import SharedMemory
@@ -12,7 +14,7 @@ from memory.task_store import TaskStore
 from memory.cost_tracker import CostTracker
 from memory.context_loader import ContextLoader
 from tools.llm_router import LLMRouter
-from tools.claude_code import ClaudeCodeTool
+from tools.claude_code import ClaudeCodeTool, VerificationLayer
 from tools.git_tool import GitTool
 from agents.pm import PMAgent
 from agents.dev import DevAgent
@@ -60,15 +62,15 @@ class NanoClawBot:
         self.task_store = TaskStore()
         self.cost_tracker = CostTracker()
         self.context_loader = ContextLoader()
-        self.router = LLMRouter(settings)
+        self.router = LLMRouter(self.cost_tracker, settings)
         self.job_queue = JobQueue(
             max_concurrent=settings.workflow.max_concurrent_jobs,
         )
 
         # Tools
-        self.claude_code = ClaudeCodeTool()
+        self.claude_code = ClaudeCodeTool(VerificationLayer())
         self.git = GitTool(
-            project_path=settings.paths.project_path,
+            repo_path=settings.paths.project_path,
             worktree_base=settings.paths.worktree_base,
             github_repo=settings.paths.github_repo,
         )
@@ -123,6 +125,74 @@ class NanoClawBot:
         # Register event handlers
         self._register_events()
 
+    async def _startup_checks(self) -> None:
+        """Run API health checks and post results to log channel."""
+        channel = self.client.get_channel(int(self.settings.discord.log_channel_id))
+        results = ["**NanoClaw startup health check**"]
+
+        # Discord — already online if we're here
+        results.append("Discord ✅ connected as `{}`".format(self.client.user))
+
+        # OpenAI
+        try:
+            oai = openai.AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
+            await oai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=1,
+            )
+            results.append("OpenAI ✅ key valid")
+        except Exception as e:
+            results.append(f"OpenAI ❌ {e}")
+
+        # Google
+        try:
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                import google.generativeai as genai
+                genai.configure(api_key=os.environ.get("GOOGLE_API_KEY", ""))
+                model = genai.GenerativeModel("gemini-2.5-flash")
+                await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: model.generate_content("ping")
+                )
+            results.append("Google ✅ key valid")
+        except Exception as e:
+            results.append(f"Google ❌ {str(e)[:200]}")
+
+        # GitHub
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "gh", "auth", "status",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env={**os.environ, "GH_TOKEN": os.environ.get("GITHUB_TOKEN", "")},
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode == 0:
+                results.append("GitHub ✅ token valid")
+            else:
+                results.append(f"GitHub ❌ {stdout.decode().strip()[:200]}")
+        except Exception as e:
+            results.append(f"GitHub ❌ {e}")
+
+        # Anthropic
+        anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if anthropic_key and not anthropic_key.startswith("your_"):
+            results.append("Anthropic ✅ key present (not tested)")
+        else:
+            results.append("Anthropic ⚠️ key not set — Claude Code tool will be unavailable")
+
+        msg = "\n".join(results)
+        logger.info(msg)
+        if channel:
+            # Discord limit is 2000 chars; truncate if needed
+            if len(msg) > 1900:
+                msg = msg[:1900] + "\n…(truncated)"
+            await channel.send(msg)
+        else:
+            logger.warning("Log channel not found — check log_channel_id in settings")
+
     def _register_events(self):
         client = self.client
 
@@ -131,6 +201,7 @@ class NanoClawBot:
             logger.info("NanoClaw online as %s", client.user)
             asyncio.create_task(self.job_queue.run())
             asyncio.create_task(self.scheduler.run())
+            asyncio.create_task(self._startup_checks())
 
         @client.event
         async def on_message(message: discord.Message):

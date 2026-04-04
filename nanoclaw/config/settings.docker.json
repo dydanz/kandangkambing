@@ -1,0 +1,46 @@
+{
+  "discord": {
+    "allowed_user_ids": ["1486543684374757416", "691898565261393948"],
+    "command_channel_id": "1486539992024088599",
+    "log_channel_id": "1489972597230665939",
+    "commits_channel_id": "1489972680919613670"
+  },
+  "workflow": {
+    "max_retries": 2,
+    "approval_timeout_minutes": 60,
+    "job_timeout_minutes": 10,
+    "max_concurrent_jobs": 2
+  },
+  "rate_limits": {
+    "llm_calls_per_hour": 30,
+    "claude_code_per_hour": 10,
+    "git_pushes_per_hour": 5,
+    "cooldown_minutes": 10
+  },
+  "budget": {
+    "daily_limit_usd": 5.00,
+    "warn_at_percent": 0.80,
+    "daily_report_time": "09:00"
+  },
+  "llm": {
+    "routing": {
+      "coding":    {"provider": "anthropic", "model": "claude-sonnet-4-6"},
+      "review":    {"provider": "anthropic", "model": "claude-sonnet-4-6"},
+      "spec":      {"provider": "anthropic", "model": "claude-sonnet-4-6"},
+      "simple":    {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
+      "test":      {"provider": "anthropic", "model": "claude-sonnet-4-6"},
+      "summarise": {"provider": "google",    "model": "gemini-2.5-flash-lite"}
+    },
+    "fallback_chain": [
+      ["anthropic", "claude-sonnet-4-6"],
+      ["google",    "gemini-2.5-flash-lite"],
+      ["google",    "gemini-2.5-flash-lite"],
+      ["anthropic", "claude-haiku-4-5-20251001"]
+    ]
+  },
+  "paths": {
+    "project_path": "/workspace/project",
+    "worktree_base": "/workspace/worktrees",
+    "github_repo": "dydanz/kandangkambing"
+  }
+}
