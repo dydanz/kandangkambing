@@ -1,0 +1,23 @@
+services:
+  nanoclaw:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Tell bot to use the Docker-specific settings file
+      NANOCLAW_SETTINGS: config/settings.docker.json
+      # Authenticate gh CLI via token (avoids interactive login)
+      GH_TOKEN: ${GITHUB_TOKEN}
+    volumes:
+      # Persistent memory (SQLite databases + tasks.json)
+      - ./memory:/app/memory
+      # Logs
+      - ./logs:/app/logs
+      # The repo the bot will actually code in — must be a git repo
+      - ${PROJECT_PATH}:/workspace/project
+      # Scratch space for git worktrees
+      - ${WORKTREE_PATH}:/workspace/worktrees
+      # SSH keys so git push works (read-only)
+      - ~/.ssh:/root/.ssh:ro
+      # Git global config (user.name, user.email)
+      - ~/.gitconfig:/root/.gitconfig:ro

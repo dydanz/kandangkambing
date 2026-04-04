@@ -1,20 +1,20 @@
 # Discord
-discord.py==2.4.0
+discord.py>=2.4.0
 
 # LLM providers
-anthropic==0.42.0
-openai==1.59.0
-google-generativeai==0.8.4
+anthropic>=0.42.0
+openai>=1.50.0
+google-generativeai>=0.8.0
 
 # Config validation
-pydantic==2.10.4
+pydantic>=2.10.0
 
 # Database
-aiosqlite==0.20.0
+aiosqlite>=0.20.0
 
 # Git operations
-GitPython==3.1.44
+GitPython>=3.1.44
 
 # Testing
-pytest==8.3.4
-pytest-asyncio==0.24.0
+pytest>=8.3.0
+pytest-asyncio>=0.24.0
