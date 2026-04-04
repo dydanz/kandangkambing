@@ -8,6 +8,9 @@ services:
       NANOCLAW_SETTINGS: config/settings.docker.json
       # Authenticate gh CLI via token (avoids interactive login)
       GH_TOKEN: ${GITHUB_TOKEN}
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     volumes:
       # Persistent memory (SQLite databases + tasks.json)
       - ./memory:/app/memory
