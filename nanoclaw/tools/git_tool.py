@@ -25,18 +25,35 @@ class GitTool(Tool):
         self.worktree_base.mkdir(parents=True, exist_ok=True)
 
     def create_worktree(self, task_id: str, title: str = "") -> str:
-        """Create a git worktree for task. Returns worktree path."""
+        """Create (or reuse) a git worktree for task. Returns worktree path."""
         slug = re.sub(r"[^a-z0-9]+", "-", title.lower())[:40].strip("-")
         branch = f"nanoclaw/{task_id}-{slug}" if slug else f"nanoclaw/{task_id}"
         worktree_path = str(self.worktree_base / task_id)
 
-        # Clean up if leftover from a previous run
+        # Reuse if there's already a valid worktree for this task
         if Path(worktree_path).exists():
+            try:
+                wt_repo = git.Repo(worktree_path)
+                existing_branch = wt_repo.active_branch.name
+                if existing_branch.startswith(f"nanoclaw/{task_id}"):
+                    logger.info(
+                        "Reusing existing worktree %s on branch %s",
+                        worktree_path, existing_branch,
+                    )
+                    return worktree_path
+            except Exception:
+                pass
+            # Stale or broken — remove and recreate
+            logger.info("Removing stale worktree %s", worktree_path)
             self.remove_worktree(worktree_path)
 
-        # Create branch from HEAD of main
         main_ref = self.repo.heads["main"]
-        self.repo.git.worktree("add", "-b", branch, worktree_path, main_ref.name)
+        # If the branch already exists (e.g. from a prior partial run), attach to it
+        branch_exists = branch in [h.name for h in self.repo.heads]
+        if branch_exists:
+            self.repo.git.worktree("add", worktree_path, branch)
+        else:
+            self.repo.git.worktree("add", "-b", branch, worktree_path, main_ref.name)
         logger.info("Created worktree %s on branch %s", worktree_path, branch)
         return worktree_path
 
