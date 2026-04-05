@@ -170,6 +170,18 @@ def test_git_create_worktree(git_tool, git_env):
     git_tool.remove_worktree(wt_path)
 
 
+def test_git_create_worktree_reuse(git_tool):
+    """Second call for the same task_id reuses the existing worktree."""
+    wt_path1 = git_tool.create_worktree("TASK-001R", "reuse test")
+    # Write a file so we can detect if it survives the second call
+    sentinel = Path(wt_path1) / "sentinel.txt"
+    sentinel.write_text("keep me")
+    wt_path2 = git_tool.create_worktree("TASK-001R", "reuse test")
+    assert wt_path1 == wt_path2
+    assert sentinel.exists(), "Existing worktree was destroyed instead of reused"
+    git_tool.remove_worktree(wt_path1)
+
+
 def test_git_create_worktree_slug(git_tool):
     wt_path = git_tool.create_worktree("TASK-002", "Fix Bug #123!")
     branch = git_tool.get_branch(wt_path)

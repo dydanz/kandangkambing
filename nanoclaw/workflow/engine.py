@@ -138,10 +138,24 @@ class WorkflowEngine:
 
         return {"task_id": task["id"], "success": False, "reason": "unknown"}
 
+    @staticmethod
+    def _extract_json(text: str) -> str:
+        """Strip markdown code fences if present, then return the raw JSON string."""
+        text = text.strip()
+        # Handle ```json ... ``` or ``` ... ```
+        if text.startswith("```"):
+            lines = text.splitlines()
+            # Drop first line (```json or ```) and last line (```)
+            inner = lines[1:] if lines[-1].strip() == "```" else lines[1:]
+            if inner and inner[-1].strip() == "```":
+                inner = inner[:-1]
+            text = "\n".join(inner).strip()
+        return text
+
     def _parse_tasks(self, spec: str) -> list[dict]:
         """Parse PM JSON output into task dicts. Raises ValueError on bad JSON."""
         try:
-            data = json.loads(spec)
+            data = json.loads(self._extract_json(spec))
         except json.JSONDecodeError as e:
             raise ValueError(f"PM returned non-JSON output: {e}") from e
         tasks = data.get("tasks", [])

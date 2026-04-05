@@ -111,9 +111,12 @@ class ClaudeCodeTool(Tool):
 
         try:
             # Run Claude Code CLI as subprocess
+            # --dangerously-skip-permissions: required for headless/container
+            # use so the CLI doesn't pause waiting for tool-use confirmations
             cmd = [
                 "claude", "-p", instruction,
                 "--output-format", "json",
+                "--dangerously-skip-permissions",
             ]
 
             proc = await asyncio.create_subprocess_exec(
