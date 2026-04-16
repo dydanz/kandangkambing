@@ -2,7 +2,7 @@
 import json
 import logging
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from agents.base import BaseAgent
@@ -88,7 +88,7 @@ class CodeReviewerAgent(BaseAgent):
         try:
             await self.git.post_pr_review(pr_number, comment)
             result.github_comment_posted = True
-        except RuntimeError as e:
+        except Exception as e:
             logger.warning("Failed to post GitHub review comment for PR #%d: %s",
                            pr_number, e)
 
