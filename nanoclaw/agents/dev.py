@@ -1,6 +1,7 @@
 """DevAgent — implements tasks via Claude Code in isolated git worktrees."""
 import logging
 import uuid
+from collections import namedtuple
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -10,6 +11,8 @@ from tools.git_tool import GitTool
 from memory.task_store import TaskStore
 
 logger = logging.getLogger("nanoclaw.agents.dev")
+
+PRInfo = namedtuple("PRInfo", ["url", "number"])
 
 
 @dataclass
@@ -106,10 +109,10 @@ class DevAgent(BaseAgent):
         )
 
     async def commit_and_push(self, task: dict,
-                              dev_result: DevResult) -> str:
+                              dev_result: DevResult) -> "PRInfo":
         """
-        Called ONLY after WorkflowEngine receives approval.
-        Returns pr_url.
+        Called ONLY after WorkflowEngine receives QA pass.
+        Returns PRInfo(url, number).
         """
         # Commit
         message = f"feat({task['id']}): {task.get('title', 'implementation')}"
@@ -132,6 +135,9 @@ class DevAgent(BaseAgent):
             pr_title, pr_body, dev_result.branch,
         )
 
+        # Extract PR number from URL (always ends in /<number>)
+        pr_number = int(pr_url.rstrip("/").rsplit("/", 1)[-1])
+
         # Clean up worktree
         self.git.remove_worktree(dev_result.worktree_path)
 
@@ -140,7 +146,7 @@ class DevAgent(BaseAgent):
             task["id"], status="done", pr_url=pr_url,
         )
 
-        return pr_url
+        return PRInfo(url=pr_url, number=pr_number)
 
     def _build_instruction(self, task: dict) -> str:
         """Build a Claude Code instruction from the task spec."""

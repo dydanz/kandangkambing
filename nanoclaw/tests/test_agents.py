@@ -7,7 +7,7 @@ import pytest
 from tools.providers.base import LLMResponse
 from agents.base import BaseAgent
 from agents.pm import PMAgent
-from agents.dev import DevAgent, DevResult
+from agents.dev import DevAgent, DevResult, PRInfo
 from agents.qa import QAAgent
 
 
@@ -240,13 +240,54 @@ async def test_dev_commit_and_push(dev_agent):
         files_changed=["main.py"],
     )
 
-    pr_url = await dev_agent.commit_and_push(task, dev_result)
+    pr_info = await dev_agent.commit_and_push(task, dev_result)
 
-    assert pr_url == "https://github.com/pr/1"
+    assert isinstance(pr_info, PRInfo)
+    assert pr_info.url == "https://github.com/pr/1"
+    assert pr_info.number == 1
     dev_agent.git.commit.assert_called_once()
     dev_agent.git.push.assert_called_once_with("/tmp/wt")
     dev_agent.git.create_pr.assert_called_once()
     dev_agent.git.remove_worktree.assert_called_once_with("/tmp/wt")
+
+
+@pytest.mark.asyncio
+async def test_dev_commit_and_push_returns_prinfo():
+    """commit_and_push should return PRInfo(url, number)."""
+    router = make_router()
+    memory = make_memory()
+    context = make_context()
+
+    git = MagicMock()
+    git.commit = MagicMock(return_value="abc123")
+    git.push = MagicMock(return_value="nanoclaw/TASK-001-test")
+    git.create_pr = AsyncMock(return_value="https://github.com/owner/repo/pull/42")
+    git.remove_worktree = MagicMock()
+
+    task_store = MagicMock()
+    task_store.update = AsyncMock()
+
+    agent = DevAgent(router, memory, context, MagicMock(), git, task_store)
+    task = {
+        "id": "TASK-001", "title": "test", "description": "desc",
+        "acceptance_criteria": [],
+    }
+    dev_result = DevResult(
+        verification_passed=True, worktree_path="/tmp/wt",
+        branch="nanoclaw/TASK-001-test", details="done", files_changed=["a.py"],
+    )
+
+    pr_info = await agent.commit_and_push(task, dev_result)
+
+    assert isinstance(pr_info, PRInfo)
+    assert pr_info.url == "https://github.com/owner/repo/pull/42"
+    assert pr_info.number == 42
+
+
+def test_pr_info_number_extracted_from_url():
+    """PRInfo.number is the integer at the end of the GitHub URL."""
+    info = PRInfo(url="https://github.com/owner/repo/pull/123", number=123)
+    assert info.number == 123
 
 
 def test_dev_build_instruction(dev_agent):
