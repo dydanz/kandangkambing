@@ -5,11 +5,13 @@ The end-to-end journey from a raw idea to a feature live in production.
 ## Overview
 
 ```
-Idea → Research → PRD → Architecture → Implementation → Testing → Deploy → Monitor
-  │        │        │         │              │              │         │         │
-  │   product-  product-  tech-lead-    plan_feature   run_tests  gitops   observability
-  │   research  manager   architect                              /cicd      -infra
+Idea → Research → PRD → TRD → Implementation → Testing → Deploy → Monitor
+  │        │        │      │         │              │         │         │
+  │   product-  product-  tech-   plan_feature   run_tests  gitops   observability
+  │   research  manager   lead-                            /cicd      -infra
+  │                       architect                                               │
   └────────────────────────────────────────────────────────────────────────────────
+         ⛔ No code written until TRD is Approved
 ```
 
 ## Phase 1: Discovery (Product)
@@ -52,28 +54,35 @@ Idea → Research → PRD → Architecture → Implementation → Testing → De
 
 ---
 
-## Phase 3: Technical Design
+## Phase 3: TRD — Technical Requirements Document
 
-**Goal:** Design how to build it before writing any code.
+**Goal:** Produce a single approved TRD before any code is written. The TRD is the authoritative contract between product, engineering, and ops.
 
 **Steps:**
 1. Invoke `/design-architecture` with the approved PRD
-2. `tech-lead-architect` agent: produce Technical Design Document
-3. Review API contract with frontend and backend leads
-4. Review data model with DBA or backend lead
-5. Identify and document technical risks with mitigations
-6. Get tech lead sign-off on design
+2. `tech-lead-architect` agent: author TRD using `templates/trd-template.md`
+3. Fill every section — leave no section blank; mark N/A only if explicitly not applicable
+4. Review API contract with frontend and backend leads
+5. Review data model with DBA or backend lead
+6. Confirm all NFRs (performance, reliability, security) have measurable targets
+7. Resolve all open questions — no TRD may be approved with open questions remaining
+8. Get tech lead sign-off → set TRD status to **Approved**
 
 **Artifacts:**
-- `.claude/thoughts/architecture/YYYY-MM-DD-[feature]-tdd.md`
+- `.claude/thoughts/trd/YYYY-MM-DD-[feature]-trd.md` (from `templates/trd-template.md`)
 - ADRs for key technical decisions (use `templates/architecture-decision-record.md`)
 
-**Exit criteria:**
-- [ ] TDD status: Approved
-- [ ] API contract reviewed by both frontend and backend
-- [ ] Data migration strategy defined (if applicable)
+**Exit criteria — hard gate, no implementation starts until all boxes are checked:**
+- [ ] TRD status: **Approved**
+- [ ] All 11 sections completed (no blanks except explicit N/A)
+- [ ] API contract reviewed by both frontend and backend leads
+- [ ] Data model and migration strategy defined (or N/A with reason)
+- [ ] All NFR targets are measurable (not "fast" — use numbers)
 - [ ] Technical risks documented with mitigations
-- [ ] Phase 1 scope clearly defined
+- [ ] Open Questions section is empty (all resolved)
+- [ ] Success metrics defined with baselines and targets
+
+> **Rule:** If implementation uncovers a gap in the TRD, stop and update the TRD first. Get re-approval before continuing.
 
 ---
 
@@ -82,7 +91,7 @@ Idea → Research → PRD → Architecture → Implementation → Testing → De
 **Goal:** Build the feature according to the TDD.
 
 **Steps:**
-1. Invoke `/plan-feature` with the approved TDD
+1. Invoke `/plan-feature` with the approved TRD
 2. Create implementation tasks from the plan
 3. Backend: implement following clean architecture
    - Domain layer first (no external deps)
