@@ -1,3 +1,102 @@
 {
-  "tasks": []
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "title": "Fetch and parse product research document from GitHub",
+      "description": "Retrieve the raw content from https://raw.githubusercontent.com/dydanz/simdikta/main/docs/product-research/ppdb-terintegrasi.md and extract all structured information including requirements, user stories, technical constraints, and system flows needed to write the TRD.",
+      "status": "in_progress",
+      "priority": "high",
+      "created_by": "pm",
+      "assigned_to": "dev",
+      "dependencies": [],
+      "retry_count": 1,
+      "max_retries": 2,
+      "acceptance_criteria": [
+        "Raw markdown content is successfully retrieved from the GitHub raw URL",
+        "All sections of the product research document are parsed and available",
+        "Key entities, workflows, user roles, and requirements are identified and catalogued"
+      ],
+      "worktree_path": "/workspace/worktrees/TASK-001",
+      "branch": "nanoclaw/TASK-001-fetch-and-parse-product-research-documen",
+      "verification": {
+        "files_created": [],
+        "tests_passed": null,
+        "syntax_clean": null,
+        "last_verified_at": null
+      },
+      "pr_url": null,
+      "discord_thread_id": null,
+      "created_at": "2026-04-04T14:31:07.676750+00:00",
+      "updated_at": "2026-04-04T14:36:09.324888+00:00"
+    },
+    {
+      "id": "TASK-002",
+      "title": "Write TRD markdown document for PPDB Terintegrasi",
+      "description": "Based on the parsed product research content from TASK-001, produce a complete Technical Requirements Document (TRD) in markdown format and write it directly into the chat response AND save it to docs/trd/ppdb-terintegrasi.md. The TRD must cover: (1) Overview & Objectives, (2) Scope & Out-of-Scope, (3) Stakeholders & User Roles, (4) Functional Requirements with MoSCoW priority labels, (5) Non-Functional Requirements (performance, scalability, security, availability, compliance), (6) System Architecture & Component Overview, (7) Data Model & Entity Relationships, (8) API Contracts / Integration Points, (9) Authentication & Authorization Model, (10) Migration & Rollout Plan, (11) Risks & Mitigations, (12) Open Questions & Assumptions.",
+      "status": "in_progress",
+      "priority": "high",
+      "created_by": "pm",
+      "assigned_to": "dev",
+      "dependencies": [
+        "TASK-001"
+      ],
+      "retry_count": 2,
+      "max_retries": 2,
+      "acceptance_criteria": [
+        "Full TRD markdown content is output directly in the response for immediate review",
+        "File docs/trd/ppdb-terintegrasi.md is created or updated in the repository",
+        "Document contains all 12 required sections listed in the description",
+        "Every functional requirement is traceable back to the product research document",
+        "Non-functional requirements include measurable thresholds (e.g., p95 response time < 500ms, uptime > 99.5%)",
+        "Data model section lists all core entities with attributes, data types, and relationships",
+        "API contracts include endpoint path, HTTP method, request schema, response schema, and auth requirement for each integration point"
+      ],
+      "worktree_path": "/workspace/worktrees/TASK-002",
+      "branch": "nanoclaw/TASK-002-write-trd-markdown-document-for-ppdb-ter",
+      "verification": {
+        "files_created": [],
+        "tests_passed": null,
+        "syntax_clean": null,
+        "last_verified_at": null
+      },
+      "pr_url": null,
+      "discord_thread_id": null,
+      "created_at": "2026-04-04T14:31:07.677441+00:00",
+      "updated_at": "2026-04-04T21:38:17.331492+00:00"
+    },
+    {
+      "id": "TASK-003",
+      "title": "Write TRD for PPDB Terintegrasi based on provided product research URL",
+      "description": "Produce a complete Technical Requirements Document (TRD) in markdown format based on the product research document at https://github.com/dydanz/simdikta/blob/main/docs/product-research/ppdb-terintegrasi.md. Use the Claude Code `WebFetch` tool to retrieve the page content directly from the GitHub URL. Then write the full TRD markdown content as output in the conversation AND save it to docs/trd/ppdb-terintegrasi.md in the repository.\n\nThe TRD must include the following sections:\n1. Overview & Objectives\n2. Scope & Out-of-Scope\n3. Stakeholders & User Roles\n4. Functional Requirements (MoSCoW prioritized)\n5. Non-Functional Requirements (performance, scalability, security, availability, compliance)\n6. System Architecture & Component Overview\n7. Data Model & Entity Relationships\n8. API Contracts / Integration Points\n9. Authentication & Authorization Model\n10. Migration & Rollout Plan\n11. Risks & Mitigations\n12. Open Questions & Assumptions",
+      "status": "open",
+      "priority": "high",
+      "created_by": "pm",
+      "assigned_to": "dev",
+      "dependencies": [],
+      "retry_count": 0,
+      "max_retries": 2,
+      "acceptance_criteria": [
+        "The GitHub product research URL is fetched successfully using WebFetch tool",
+        "Full TRD markdown is written as output in the conversation for immediate review",
+        "File docs/trd/ppdb-terintegrasi.md is created or updated in the repository",
+        "Document contains all 12 required sections",
+        "Every functional requirement is traceable to content found in the product research document",
+        "Non-functional requirements include measurable thresholds (e.g., p95 response time < 500ms, uptime > 99.5%)",
+        "Data model section lists core entities with attributes, data types, and relationships",
+        "API contracts include endpoint path, HTTP method, request schema, response schema, and auth requirement"
+      ],
+      "worktree_path": null,
+      "branch": null,
+      "verification": {
+        "files_created": [],
+        "tests_passed": null,
+        "syntax_clean": null,
+        "last_verified_at": null
+      },
+      "pr_url": null,
+      "discord_thread_id": null,
+      "created_at": "2026-04-04T21:38:14.373822+00:00",
+      "updated_at": "2026-04-04T21:38:14.373822+00:00"
+    }
+  ]
 }

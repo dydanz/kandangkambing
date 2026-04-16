@@ -10,11 +10,12 @@ TDD Approved → Branch → Implement → Test → Review → Merge → Deploy D
 
 ## Prerequisites
 
-Before starting implementation:
+Before starting implementation — **no code written until all boxes are checked:**
 - [ ] PRD is approved (`.claude/thoughts/prd/`)
-- [ ] TDD is approved (`.claude/thoughts/architecture/`)
+- [ ] TRD is approved (`.claude/thoughts/trd/`) — generated from `templates/trd-template.md`
+- [ ] TRD Open Questions section is empty (all resolved before approval)
 - [ ] Feature is broken into implementation tasks (via `/plan-feature`)
-- [ ] All open questions in TDD resolved
+- [ ] All NFR targets in TRD are measurable numbers (not qualitative descriptions)
 
 ## Step 1: Branch Setup
 
@@ -169,7 +170,8 @@ If you hit a blocker:
 3. Use `/analyze-codebase` to understand the affected area
 4. Ask for help early — don't spend > 2 hours blocked without asking
 
-If the TDD is wrong (discovered during implementation):
-1. Do NOT silently deviate — update the TDD first
-2. Get sign-off from tech lead on the change
-3. Update the plan, then continue implementation
+If the TRD is wrong or incomplete (discovered during implementation):
+1. Do NOT silently deviate — stop implementation immediately
+2. Update the TRD first (`.claude/thoughts/trd/`)
+3. Get tech lead re-approval on the changed sections
+4. Update the implementation plan if scope changed, then continue
