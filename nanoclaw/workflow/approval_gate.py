@@ -73,7 +73,7 @@ class ApprovalGate:
         github_task = None
         try:
             if pr_info and self.git:
-                github_task = asyncio.ensure_future(
+                github_task = asyncio.create_task(
                     self.wait_for_github_merge(
                         pr_info.number,
                         poll_interval_seconds=poll_interval_seconds,
@@ -91,7 +91,12 @@ class ApprovalGate:
                         f"{self.timeout // 60} minutes. Task cancelled."
                     )
                     return False
-                return next(iter(done)).result()
+                winner = next(iter(done))
+                try:
+                    return winner.result()
+                except Exception as exc:
+                    logger.warning("ApprovalGate signal raised %s — treating as rejected", exc)
+                    return False
             else:
                 approved = await asyncio.wait_for(
                     discord_future, timeout=self.timeout
@@ -113,9 +118,16 @@ class ApprovalGate:
 
     async def wait_for_github_merge(self, pr_number: int,
                                     poll_interval_seconds: int = 30) -> bool:
-        """Poll GitHub PR state. Returns True on MERGED, False on CLOSED."""
+        """Poll GitHub PR state. Returns True on MERGED, False on CLOSED.
+        Retries on transient API errors."""
         while True:
-            state = await self.git.get_pr_state(pr_number)
+            try:
+                state = await self.git.get_pr_state(pr_number)
+            except Exception as exc:
+                logger.warning("Error polling PR #%d state: %s — retrying",
+                               pr_number, exc)
+                await asyncio.sleep(poll_interval_seconds)
+                continue
             if state == "MERGED":
                 logger.info("PR #%d merged on GitHub", pr_number)
                 return True
