@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agents.dev import DevResult
+from agents.dev import DevResult, PRInfo
 from workflow.engine import WorkflowEngine, DEFAULT_MAX_RETRIES
 from workflow.job_queue import JobQueue, Job
 from workflow.approval_gate import ApprovalGate, APPROVE_EMOJI, REJECT_EMOJI
@@ -519,3 +519,143 @@ async def test_orchestrator_unknown_command(orchestrator):
 async def test_orchestrator_empty_command(orchestrator):
     result = await orchestrator.handle("", "user1")
     assert "Commands:" in result
+
+
+# Helper — shared with new approval gate tests
+def make_pr_info(number=42):
+    return PRInfo(url=f"https://github.com/owner/repo/pull/{number}", number=number)
+
+
+# --- ApprovalGate dual-signal tests ---
+
+@pytest.mark.asyncio
+async def test_approval_gate_github_merge_resolves_gate():
+    """Gate resolves True when GitHub PR is merged before Discord reaction."""
+    bot = MagicMock()
+    channel = AsyncMock()
+    msg = AsyncMock()
+    channel.send = AsyncMock(return_value=msg)
+    bot.get_channel = MagicMock(return_value=channel)
+
+    git = MagicMock()
+    # First call returns OPEN, second returns MERGED
+    git.get_pr_state = AsyncMock(side_effect=["OPEN", "MERGED"])
+
+    gate = ApprovalGate(bot, git=git, timeout_minutes=1)
+    gate.timeout = 5.0
+    task = make_task()
+
+    result = await gate.request(task, make_dev_result(),
+                                pr_info=make_pr_info(),
+                                poll_interval_seconds=0.05)
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_approval_gate_github_close_resolves_false():
+    """Gate resolves False when GitHub PR is closed."""
+    bot = MagicMock()
+    channel = AsyncMock()
+    msg = AsyncMock()
+    channel.send = AsyncMock(return_value=msg)
+    bot.get_channel = MagicMock(return_value=channel)
+
+    git = MagicMock()
+    git.get_pr_state = AsyncMock(return_value="CLOSED")
+
+    gate = ApprovalGate(bot, git=git, timeout_minutes=1)
+    gate.timeout = 5.0
+    task = make_task()
+
+    result = await gate.request(task, make_dev_result(),
+                                pr_info=make_pr_info(),
+                                poll_interval_seconds=0.05)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_approval_gate_discord_wins_over_github():
+    """Discord reaction resolves gate before GitHub polling does."""
+    bot = MagicMock()
+    channel = AsyncMock()
+    msg = AsyncMock()
+    channel.send = AsyncMock(return_value=msg)
+    bot.get_channel = MagicMock(return_value=channel)
+
+    git = MagicMock()
+    git.get_pr_state = AsyncMock(return_value="OPEN")
+
+    gate = ApprovalGate(bot, git=git, timeout_minutes=1)
+    gate.timeout = 5.0
+    task = make_task()
+
+    async def approve_via_discord():
+        await asyncio.sleep(0.05)
+        gate.resolve("TASK-001", True)
+
+    asyncio.create_task(approve_via_discord())
+    result = await gate.request(task, make_dev_result(),
+                                pr_info=make_pr_info(),
+                                poll_interval_seconds=10)
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_approval_gate_resolve_by_pr():
+    """resolve_by_pr finds and resolves the gate for a given PR number."""
+    bot = MagicMock()
+    channel = AsyncMock()
+    msg = AsyncMock()
+    channel.send = AsyncMock(return_value=msg)
+    bot.get_channel = MagicMock(return_value=channel)
+
+    git = MagicMock()
+    git.get_pr_state = AsyncMock(return_value="OPEN")
+
+    gate = ApprovalGate(bot, git=git, timeout_minutes=1)
+    gate.timeout = 5.0
+    task = make_task()
+
+    async def override_after_delay():
+        await asyncio.sleep(0.05)
+        resolved = gate.resolve_by_pr(42, True)
+        assert resolved is True
+
+    asyncio.create_task(override_after_delay())
+    result = await gate.request(task, make_dev_result(),
+                                pr_info=make_pr_info(42),
+                                poll_interval_seconds=10)
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_approval_gate_resolve_by_pr_not_found():
+    """resolve_by_pr returns False when no gate exists for the PR number."""
+    bot = MagicMock()
+    gate = ApprovalGate(bot, timeout_minutes=1)
+    result = gate.resolve_by_pr(999, True)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_approval_gate_wait_for_github_merge_merged():
+    """wait_for_github_merge returns True when state becomes MERGED."""
+    bot = MagicMock()
+    git = MagicMock()
+    git.get_pr_state = AsyncMock(side_effect=["OPEN", "OPEN", "MERGED"])
+
+    gate = ApprovalGate(bot, git=git, timeout_minutes=1)
+    result = await gate.wait_for_github_merge(42, poll_interval_seconds=0.01)
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_approval_gate_wait_for_github_merge_closed():
+    """wait_for_github_merge returns False when state becomes CLOSED."""
+    bot = MagicMock()
+    git = MagicMock()
+    git.get_pr_state = AsyncMock(return_value="CLOSED")
+
+    gate = ApprovalGate(bot, git=git, timeout_minutes=1)
+    result = await gate.wait_for_github_merge(42, poll_interval_seconds=0.01)
+    assert result is False
