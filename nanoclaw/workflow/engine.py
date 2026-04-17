@@ -159,12 +159,15 @@ class WorkflowEngine:
                     f"`review override {pr_info.number}` to force-approve.\n\n"
                     + review_summary
                 )
+                merge_task = asyncio.create_task(
+                    self.gate.wait_for_github_merge(pr_info.number)
+                )
                 try:
                     merged = await asyncio.wait_for(
-                        self.gate.wait_for_github_merge(pr_info.number),
-                        timeout=self.gate.timeout,
+                        merge_task, timeout=self.gate.timeout,
                     )
                 except asyncio.TimeoutError:
+                    merge_task.cancel()
                     logger.info(
                         "GitHub merge wait timed out for PR #%d after %d minutes",
                         pr_info.number, self.gate.timeout // 60,
