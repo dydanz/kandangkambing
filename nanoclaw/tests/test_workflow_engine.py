@@ -765,3 +765,96 @@ async def test_run_feature_reviewer_exception_proceeds_to_gate(
     # Should not raise; gate should still be called
     mock_gate.request.assert_called_once()
     assert result["tasks"][0]["success"] is True
+
+
+# --- Orchestrator review command tests ---
+
+def make_clean_review(pr_number=42):
+    return ReviewResult(
+        pr_number=pr_number, critical=[], important=[],
+        suggestions=[], positives=["Clean"], summary="All good.",
+        github_comment_posted=True,
+    )
+
+
+@pytest.fixture
+def orchestrator_with_reviewer():
+    engine = MagicMock()
+    engine.run_feature = AsyncMock(return_value={"session_id": "abc", "tasks": []})
+    engine.run_single_task = AsyncMock(return_value={
+        "task_id": "TASK-001", "success": True,
+        "pr_url": "https://github.com/owner/repo/pull/1",
+    })
+    engine._noop_progress = AsyncMock()
+
+    task_store = MagicMock()
+    task_store.get = AsyncMock(return_value=make_task())
+    task_store.update = AsyncMock()
+    task_store.list_tasks = AsyncMock(return_value=[make_task(status="open")])
+
+    job_queue = MagicMock()
+    job_queue.enqueue = AsyncMock()
+    job_queue.stop = AsyncMock()
+    job_queue.resume = AsyncMock()
+    job_queue.active_count = 0
+    job_queue.queued_count = 0
+    job_queue.is_stopped = False
+
+    cost_tracker = MagicMock()
+    cost_tracker.daily_total = AsyncMock(return_value=0.0)
+
+    code_reviewer = MagicMock()
+    code_reviewer.review = AsyncMock(return_value=make_clean_review())
+
+    gate = MagicMock()
+    gate.resolve_by_pr = MagicMock(return_value=True)
+
+    return Orchestrator(
+        engine=engine,
+        task_store=task_store,
+        job_queue=job_queue,
+        cost_tracker=cost_tracker,
+        code_reviewer=code_reviewer,
+        approval_gate=gate,
+    )
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_review_enqueues_job(orchestrator_with_reviewer):
+    result = await orchestrator_with_reviewer.handle("review 42", "user1")
+    assert "Queued" in result
+    assert "42" in result
+    orchestrator_with_reviewer.job_queue.enqueue.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_review_missing_number(orchestrator_with_reviewer):
+    result = await orchestrator_with_reviewer.handle("review", "user1")
+    assert "Usage" in result
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_review_invalid_number(orchestrator_with_reviewer):
+    result = await orchestrator_with_reviewer.handle("review abc", "user1")
+    assert "valid integer" in result.lower() or "Usage" in result
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_review_override_resolves_gate(orchestrator_with_reviewer):
+    result = await orchestrator_with_reviewer.handle("review override 42", "user1")
+    assert "override" in result.lower() or "approved" in result.lower()
+    orchestrator_with_reviewer.approval_gate.resolve_by_pr.assert_called_once_with(42, True)
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_review_override_not_found(orchestrator_with_reviewer):
+    orchestrator_with_reviewer.approval_gate.resolve_by_pr = MagicMock(return_value=False)
+    result = await orchestrator_with_reviewer.handle("review override 999", "user1")
+    assert "no pending" in result.lower() or "not found" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_usage_includes_review():
+    """usage string mentions the review command."""
+    result = Orchestrator._usage()
+    assert "review" in result
