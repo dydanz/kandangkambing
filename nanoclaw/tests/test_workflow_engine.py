@@ -717,6 +717,7 @@ async def test_run_feature_critical_findings_skip_discord_gate(
     gate = MagicMock()
     gate.request = AsyncMock(return_value=True)
     gate.wait_for_github_merge = AsyncMock(return_value=True)
+    gate.timeout = 3600  # numeric so asyncio.wait_for can compare it
 
     reviewer = MagicMock()
     reviewer.review = AsyncMock(
@@ -744,3 +745,23 @@ async def test_run_feature_pr_url_from_prinfo(engine):
     """pr_url in result comes from PRInfo.url."""
     result = await engine.run_feature("Add feature")
     assert result["tasks"][0]["pr_url"] == "https://github.com/owner/repo/pull/1"
+
+
+@pytest.mark.asyncio
+async def test_run_feature_reviewer_exception_proceeds_to_gate(
+    mock_pm, mock_dev, mock_qa, mock_task_store, mock_gate
+):
+    """If code_reviewer.review() raises, engine proceeds to approval gate (non-fatal)."""
+    reviewer = MagicMock()
+    reviewer.review = AsyncMock(side_effect=RuntimeError("LLM timeout"))
+
+    engine = WorkflowEngine(
+        pm=mock_pm, dev=mock_dev, qa=mock_qa,
+        code_reviewer=reviewer,
+        task_store=mock_task_store,
+        approval_gate=mock_gate,
+    )
+    result = await engine.run_feature("Add feature")
+    # Should not raise; gate should still be called
+    mock_gate.request.assert_called_once()
+    assert result["tasks"][0]["success"] is True

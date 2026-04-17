@@ -1,4 +1,5 @@
 """WorkflowEngine — PM→Dev→QA orchestration loop with retry and approval."""
+import asyncio
 import json
 import logging
 import uuid
@@ -123,28 +124,52 @@ class WorkflowEngine:
 
             # QA passed — create PR
             await self._progress(f"{task['id']} QA passed — creating PR...")
-            pr_info = await self.dev.commit_and_push(task, dev_result)
+            try:
+                pr_info = await self.dev.commit_and_push(task, dev_result)
+            except Exception as exc:
+                logger.warning("commit_and_push failed for %s: %s", task["id"], exc)
+                await self.task_store.update(task["id"], status="failed")
+                return {"task_id": task["id"], "success": False,
+                        "reason": f"commit/push failed: {exc}"}
 
             # Run code review
             await self._progress(
                 f"PR created: {pr_info.url} — running code review..."
             )
-            review = await self.code_reviewer.review(
-                pr_number=pr_info.number,
-                task_id=task["id"],
-                session_id=session_id,
-            )
+            try:
+                review = await self.code_reviewer.review(
+                    pr_number=pr_info.number,
+                    task_id=task["id"],
+                    session_id=session_id,
+                )
+                review_summary = CodeReviewerAgent.format_discord_summary(review)
+                has_critical = review.has_critical
+            except Exception as exc:
+                logger.warning(
+                    "Code review failed for PR #%d: %s — proceeding to gate without review",
+                    pr_info.number, exc,
+                )
+                review_summary = f"⚠️ Code review failed: {exc}. Proceeding to manual approval."
+                has_critical = False
 
-            review_summary = CodeReviewerAgent.format_discord_summary(review)
-
-            if review.has_critical:
+            if has_critical:
                 await self._progress(
                     f"🔴 Critical issues found on PR #{pr_info.number}. "
                     f"Fix them and merge on GitHub, or use "
                     f"`review override {pr_info.number}` to force-approve.\n\n"
                     + review_summary
                 )
-                merged = await self.gate.wait_for_github_merge(pr_info.number)
+                try:
+                    merged = await asyncio.wait_for(
+                        self.gate.wait_for_github_merge(pr_info.number),
+                        timeout=self.gate.timeout,
+                    )
+                except asyncio.TimeoutError:
+                    logger.info(
+                        "GitHub merge wait timed out for PR #%d after %d minutes",
+                        pr_info.number, self.gate.timeout // 60,
+                    )
+                    merged = False
                 return {"task_id": task["id"], "success": merged,
                         "pr_url": pr_info.url}
 
