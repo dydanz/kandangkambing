@@ -161,7 +161,7 @@ class WorkflowEngine:
             else:
                 await self.task_store.update(task["id"], status="failed")
                 return {"task_id": task["id"], "success": False,
-                        "reason": "rejected by user"}
+                        "reason": "rejected by user", "pr_url": pr_info.url}
 
         return {"task_id": task["id"], "success": False, "reason": "unknown"}
 
