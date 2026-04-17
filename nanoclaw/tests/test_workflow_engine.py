@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from agents.dev import DevResult, PRInfo
+from agents.code_reviewer import CodeReviewerAgent, ReviewResult, Finding
 from workflow.engine import WorkflowEngine, DEFAULT_MAX_RETRIES
 from workflow.job_queue import JobQueue, Job
 from workflow.approval_gate import ApprovalGate, APPROVE_EMOJI, REJECT_EMOJI
@@ -61,7 +62,11 @@ def mock_pm():
 def mock_dev():
     dev = MagicMock()
     dev.implement = AsyncMock(return_value=make_dev_result())
-    dev.commit_and_push = AsyncMock(return_value="https://github.com/pr/1")
+    dev.commit_and_push = AsyncMock(
+        return_value=PRInfo(
+            url="https://github.com/owner/repo/pull/1", number=1
+        )
+    )
     return dev
 
 
@@ -94,10 +99,35 @@ def mock_gate():
     return gate
 
 
+def make_review_result(has_critical=False, pr_number=1):
+    critical = [
+        Finding(location="a.py:1", issue="SQL injection", fix="Use params")
+    ] if has_critical else []
+    return ReviewResult(
+        pr_number=pr_number,
+        critical=critical,
+        important=[],
+        suggestions=[],
+        positives=["Clean code"],
+        summary="Review complete.",
+        github_comment_posted=True,
+    )
+
+
 @pytest.fixture
-def engine(mock_pm, mock_dev, mock_qa, mock_task_store, mock_gate):
+def mock_code_reviewer():
+    reviewer = MagicMock()
+    reviewer.review = AsyncMock(return_value=make_review_result())
+    reviewer.format_discord_summary = CodeReviewerAgent.format_discord_summary
+    return reviewer
+
+
+@pytest.fixture
+def engine(mock_pm, mock_dev, mock_qa, mock_code_reviewer,
+           mock_task_store, mock_gate):
     return WorkflowEngine(
         pm=mock_pm, dev=mock_dev, qa=mock_qa,
+        code_reviewer=mock_code_reviewer,
         task_store=mock_task_store,
         approval_gate=mock_gate,
     )
@@ -111,7 +141,7 @@ async def test_run_feature_success(engine, mock_pm, mock_dev, mock_qa, mock_gate
     assert result["session_id"]
     assert len(result["tasks"]) == 1
     assert result["tasks"][0]["success"] is True
-    assert result["tasks"][0]["pr_url"] == "https://github.com/pr/1"
+    assert result["tasks"][0]["pr_url"] == "https://github.com/owner/repo/pull/1"
     mock_pm.handle.assert_called_once()
     mock_dev.implement.assert_called_once()
     mock_qa.handle.assert_called_once()
@@ -185,10 +215,12 @@ async def test_run_single_task_success(engine, mock_task_store):
 
 @pytest.mark.asyncio
 async def test_progress_callback_called(mock_pm, mock_dev, mock_qa,
-                                        mock_task_store, mock_gate):
+                                        mock_code_reviewer, mock_task_store,
+                                        mock_gate):
     progress = AsyncMock()
     engine = WorkflowEngine(
         pm=mock_pm, dev=mock_dev, qa=mock_qa,
+        code_reviewer=mock_code_reviewer,
         task_store=mock_task_store,
         approval_gate=mock_gate,
         progress_callback=progress,
@@ -659,3 +691,56 @@ async def test_approval_gate_wait_for_github_merge_closed():
     gate = ApprovalGate(bot, git=git, timeout_minutes=1)
     result = await gate.wait_for_github_merge(42, poll_interval_seconds=0.01)
     assert result is False
+
+
+# --- WorkflowEngine code review tests ---
+
+@pytest.mark.asyncio
+async def test_run_feature_code_review_called_after_qa(
+    engine, mock_dev, mock_qa, mock_code_reviewer, mock_gate
+):
+    """Code review runs after QA passes, before approval gate."""
+    result = await engine.run_feature("Add health endpoint")
+    assert result["tasks"][0]["success"] is True
+    # commit_and_push called before code review
+    mock_dev.commit_and_push.assert_called_once()
+    mock_code_reviewer.review.assert_called_once()
+    # approval gate called after review
+    mock_gate.request.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_run_feature_critical_findings_skip_discord_gate(
+    mock_pm, mock_dev, mock_qa, mock_task_store
+):
+    """Critical findings bypass Discord gate — waits for GitHub merge only."""
+    gate = MagicMock()
+    gate.request = AsyncMock(return_value=True)
+    gate.wait_for_github_merge = AsyncMock(return_value=True)
+
+    reviewer = MagicMock()
+    reviewer.review = AsyncMock(
+        return_value=make_review_result(has_critical=True)
+    )
+    reviewer.format_discord_summary = CodeReviewerAgent.format_discord_summary
+
+    engine = WorkflowEngine(
+        pm=mock_pm, dev=mock_dev, qa=mock_qa,
+        code_reviewer=reviewer,
+        task_store=mock_task_store,
+        approval_gate=gate,
+    )
+    result = await engine.run_feature("Add feature")
+
+    # Discord gate NOT called for critical findings
+    gate.request.assert_not_called()
+    # GitHub merge waited on instead
+    gate.wait_for_github_merge.assert_called_once()
+    assert result["tasks"][0]["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_run_feature_pr_url_from_prinfo(engine):
+    """pr_url in result comes from PRInfo.url."""
+    result = await engine.run_feature("Add feature")
+    assert result["tasks"][0]["pr_url"] == "https://github.com/owner/repo/pull/1"
