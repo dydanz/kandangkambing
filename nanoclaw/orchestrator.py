@@ -64,7 +64,16 @@ class Orchestrator:
         if keyword == "cost":
             return await self._handle_cost()
 
-        # Safety checks for work commands
+        # review override makes no LLM calls — exempt from safety gates
+        if keyword == "review" and len(parts) >= 2 and parts[1].lower() == "override":
+            raw = parts[2] if len(parts) >= 3 else None
+            try:
+                pr_number = int(raw) if raw else None
+            except ValueError:
+                pr_number = None
+            return await self._handle_review_override(pr_number)
+
+        # Safety checks for work commands (review override already handled above)
         if keyword in ("pm", "dev", "feature", "build", "implement", "review"):
             blocked = await self._check_safety_gates()
             if blocked:
@@ -98,16 +107,8 @@ class Orchestrator:
                     instruction, thread_id, progress_callback,
                 )
 
-        # Review commands
+        # Review command (override already handled before safety gate above)
         if keyword == "review":
-            if len(parts) >= 2 and parts[1].lower() == "override":
-                raw = parts[2] if len(parts) >= 3 else None
-                try:
-                    pr_number = int(raw) if raw else None
-                except ValueError:
-                    pr_number = None
-                return await self._handle_review_override(pr_number)
-
             raw = parts[1] if len(parts) >= 2 else None
             try:
                 pr_number = int(raw) if raw else None
@@ -246,9 +247,16 @@ class Orchestrator:
                 summary = CodeReviewerAgent.format_discord_summary(review)
                 await progress_callback(summary)
 
+        async def on_error_fn(exc: Exception) -> None:
+            if progress_callback:
+                await progress_callback(
+                    f"Code review for PR #{pr_number} failed: {exc}"
+                )
+
         job = Job(
             id=f"review-{pr_number}-{session_id[:8]}",
             fn=job_fn,
+            on_error=on_error_fn,
             discord_thread_id=thread_id,
         )
         await self.job_queue.enqueue(job)
