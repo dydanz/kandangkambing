@@ -19,6 +19,7 @@ from tools.git_tool import GitTool
 from agents.pm import PMAgent
 from agents.dev import DevAgent
 from agents.qa import QAAgent
+from agents.code_reviewer import CodeReviewerAgent
 from workflow.engine import WorkflowEngine
 from workflow.approval_gate import ApprovalGate, APPROVE_EMOJI, REJECT_EMOJI
 from workflow.job_queue import JobQueue, Job
@@ -82,16 +83,21 @@ class NanoClawBot:
             self.claude_code, self.git, self.task_store,
         )
         self.qa = QAAgent(self.router, self.memory, self.context_loader)
+        self.code_reviewer = CodeReviewerAgent(
+            self.router, self.memory, self.context_loader, self.git,
+        )
 
         # Approval gate
         self.approval_gate = ApprovalGate(
             self.client,
+            git=self.git,
             timeout_minutes=settings.workflow.approval_timeout_minutes,
         )
 
         # Workflow engine
         self.engine = WorkflowEngine(
             pm=self.pm, dev=self.dev, qa=self.qa,
+            code_reviewer=self.code_reviewer,
             task_store=self.task_store,
             approval_gate=self.approval_gate,
             max_retries=settings.workflow.max_retries,
@@ -111,6 +117,8 @@ class NanoClawBot:
             task_store=self.task_store,
             job_queue=self.job_queue,
             cost_tracker=self.cost_tracker,
+            code_reviewer=self.code_reviewer,
+            approval_gate=self.approval_gate,
             rate_limiter=self.rate_limiter,
             budget_guard=self.budget_guard,
         )
@@ -324,7 +332,7 @@ class NanoClawBot:
         """Return True if this command will produce task output worth threading."""
         cmd_lower = command.lower()
         return any(cmd_lower.startswith(prefix) for prefix in (
-            "pm ", "dev ", "implement ", "build ", "feature ",
+            "pm ", "dev ", "implement ", "build ", "feature ", "review ",
         ))
 
     def run(self):
