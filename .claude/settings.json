@@ -37,7 +37,8 @@
       "Bash(ls *)",
       "Bash(find *)",
       "Bash(cat *)",
-      "Bash(echo *)"
+      "Bash(echo *)",
+      "Bash(cd *)"
     ],
     "deny": [
       "Bash(rm -rf *)",

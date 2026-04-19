@@ -1,6 +1,6 @@
 # kandangkambing
 
-A very basic Nanoclaw-based Discord bot that takes a feature request and turns it into a GitHub PR — with a PM agent to plan it, a Dev agent to implement it via Claude Code, and a QA agent to check the result before anything gets pushed.
+A Discord bot that takes a feature request and turns it into a GitHub PR — with a PM agent to plan it, a Dev agent to implement it via Claude Code, and a QA agent to check the result before anything gets pushed.
 
 You describe what you want. It opens a PR. You approve or reject it.
 
@@ -33,4 +33,3 @@ See [CLAUDE.md](CLAUDE.md) for full setup, Docker instructions, and how the agen
 
 If you want to understand how it works before reading the code, start here:
 https://dydanz.github.io/blog/building-nanoclaw
-
