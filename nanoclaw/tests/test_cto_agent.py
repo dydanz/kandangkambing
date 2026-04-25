@@ -83,3 +83,17 @@ def test_parse_decision_missing_fields_returns_clarify_fallback():
     raw = json.dumps({"action": "execute"})
     decision = CTOAgent._parse_decision(raw)
     assert decision.action == "clarify"
+
+
+def test_parse_decision_unknown_action_returns_clarify_fallback():
+    raw = json.dumps({
+        "action": "run_it",
+        "command": "some command",
+        "response": None,
+        "question": None,
+        "intent": "coding",
+        "confidence": 0.9,
+        "reasoning": "unknown action"
+    })
+    decision = CTOAgent._parse_decision(raw)
+    assert decision.action == "clarify"
