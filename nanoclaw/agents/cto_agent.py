@@ -9,7 +9,7 @@ from agents.base import BaseAgent
 logger = logging.getLogger("nanoclaw.agents.cto")
 
 
-@dataclass
+@dataclass(frozen=True)
 class CTODecision:
     action: str           # "execute" | "respond" | "clarify"
     command: str | None   # orchestrator command string (action=execute only)
@@ -36,7 +36,7 @@ _DESTRUCTIVE_CLARIFY = CTODecision(
     response=None,
     question="That looks like a destructive action — can you confirm exactly what you want to do?",
     intent="unclear",
-    confidence=1.0,
+    confidence=0.0,
     reasoning="destructive command guard triggered",
 )
 
@@ -47,6 +47,11 @@ class CTOAgent(BaseAgent):
     name = "cto"
     task_type = "cto"
     prompt_file = "config/prompts/cto_prompt.md"
+
+    # process() and _apply_destructive_guard() are defined in cto_agent.py
+    # but implemented in the next task. This skeleton exposes _parse_decision
+    # for isolated testing. The destructive-guard constants (_DESTRUCTIVE_CLARIFY,
+    # _DESTRUCTIVE_KEYWORDS) are defined at module level ready for use in process().
 
     @staticmethod
     def _parse_decision(raw: str) -> CTODecision:
@@ -70,6 +75,11 @@ class CTOAgent(BaseAgent):
                     "intent", "confidence", "reasoning"}
         if not required.issubset(data.keys()):
             logger.warning("CTOAgent: missing fields: %s", required - data.keys())
+            return _FALLBACK_DECISION
+
+        valid_actions = {"execute", "respond", "clarify"}
+        if data.get("action") not in valid_actions:
+            logger.warning("CTOAgent: unknown action '%s'", data.get("action"))
             return _FALLBACK_DECISION
 
         try:
