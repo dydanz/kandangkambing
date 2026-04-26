@@ -212,3 +212,157 @@ async def test_handle_message_clarify_posts_question():
         message.channel.send.assert_called_once_with(
             "Which part needs improvement — performance, UX, or something specific?"
         )
+
+
+# --- document action ---
+
+def make_document_decision(
+    doc_title="OAuth 2.0 Options",
+    doc_filename="oauth-2-options.md",
+    save_to_repo=False,
+    document_content="# OAuth 2.0 Options\n\n## Summary\nThree flows...",
+):
+    return CTODecision(
+        action="document",
+        command=None,
+        response=None,
+        question=None,
+        intent="research",
+        confidence=0.9,
+        reasoning="brief requested",
+        doc_title=doc_title,
+        doc_filename=doc_filename,
+        save_to_repo=save_to_repo,
+        document_content=document_content,
+    )
+
+
+@pytest.mark.asyncio
+async def test_handle_message_document_posts_preview():
+    from bot import NanoClawBot
+
+    with patch("bot.discord.Client"), \
+         patch("bot.SharedMemory"), \
+         patch("bot.TaskStore"), \
+         patch("bot.CostTracker"), \
+         patch("bot.ContextLoader"), \
+         patch("bot.LLMRouter"), \
+         patch("bot.ClaudeCodeTool"), \
+         patch("bot.VerificationLayer"), \
+         patch("bot.GitTool"), \
+         patch("bot.PMAgent"), \
+         patch("bot.DevAgent"), \
+         patch("bot.QAAgent"), \
+         patch("bot.ApprovalGate"), \
+         patch("bot.JobQueue"), \
+         patch("bot.WorkflowEngine"), \
+         patch("bot.BudgetGuard"), \
+         patch("bot.RateLimiter"), \
+         patch("bot.DailyScheduler"), \
+         patch("bot.Auth"), \
+         patch("bot.CTOAgent"):
+
+        bot = NanoClawBot(_load_settings())
+        bot.client.user = MagicMock(id=999)
+
+        doc_decision = make_document_decision(save_to_repo=False)
+        bot.cto.process = AsyncMock(return_value=doc_decision)
+        bot.orchestrator.handle = AsyncMock()
+
+        message = make_message("research OAuth options")
+        await bot._handle_message(message)
+
+        bot.orchestrator.handle.assert_not_called()
+        message.channel.send.assert_called_once()
+        sent_text = message.channel.send.call_args[0][0]
+        assert "OAuth" in sent_text
+        message.create_thread.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_message_document_save_to_repo_calls_git():
+    from bot import NanoClawBot
+
+    with patch("bot.discord.Client"), \
+         patch("bot.SharedMemory"), \
+         patch("bot.TaskStore"), \
+         patch("bot.CostTracker"), \
+         patch("bot.ContextLoader"), \
+         patch("bot.LLMRouter"), \
+         patch("bot.ClaudeCodeTool"), \
+         patch("bot.VerificationLayer"), \
+         patch("bot.GitTool"), \
+         patch("bot.PMAgent"), \
+         patch("bot.DevAgent"), \
+         patch("bot.QAAgent"), \
+         patch("bot.ApprovalGate"), \
+         patch("bot.JobQueue"), \
+         patch("bot.WorkflowEngine"), \
+         patch("bot.BudgetGuard"), \
+         patch("bot.RateLimiter"), \
+         patch("bot.DailyScheduler"), \
+         patch("bot.Auth"), \
+         patch("bot.CTOAgent"):
+
+        bot = NanoClawBot(_load_settings())
+        bot.client.user = MagicMock(id=999)
+
+        doc_decision = make_document_decision(save_to_repo=True)
+        bot.cto.process = AsyncMock(return_value=doc_decision)
+        bot.orchestrator.handle = AsyncMock()
+        bot.git.write_and_commit = AsyncMock()
+
+        message = make_message("research OAuth options and save it")
+        await bot._handle_message(message)
+
+        bot.git.write_and_commit.assert_called_once()
+        call_kwargs = bot.git.write_and_commit.call_args.kwargs
+        assert call_kwargs["path"] == "docs/research/oauth-2-options.md"
+        assert "OAuth" in call_kwargs["content"]
+        assert "oauth" in call_kwargs["message"].lower()
+
+        assert message.channel.send.call_count == 2
+        second_send = message.channel.send.call_args_list[1][0][0]
+        assert "docs/research/oauth-2-options.md" in second_send
+
+
+@pytest.mark.asyncio
+async def test_handle_message_document_git_failure_posts_warning():
+    from bot import NanoClawBot
+
+    with patch("bot.discord.Client"), \
+         patch("bot.SharedMemory"), \
+         patch("bot.TaskStore"), \
+         patch("bot.CostTracker"), \
+         patch("bot.ContextLoader"), \
+         patch("bot.LLMRouter"), \
+         patch("bot.ClaudeCodeTool"), \
+         patch("bot.VerificationLayer"), \
+         patch("bot.GitTool"), \
+         patch("bot.PMAgent"), \
+         patch("bot.DevAgent"), \
+         patch("bot.QAAgent"), \
+         patch("bot.ApprovalGate"), \
+         patch("bot.JobQueue"), \
+         patch("bot.WorkflowEngine"), \
+         patch("bot.BudgetGuard"), \
+         patch("bot.RateLimiter"), \
+         patch("bot.DailyScheduler"), \
+         patch("bot.Auth"), \
+         patch("bot.CTOAgent"):
+
+        bot = NanoClawBot(_load_settings())
+        bot.client.user = MagicMock(id=999)
+
+        doc_decision = make_document_decision(save_to_repo=True)
+        bot.cto.process = AsyncMock(return_value=doc_decision)
+        bot.orchestrator.handle = AsyncMock()
+        bot.git.write_and_commit = AsyncMock(side_effect=Exception("git commit failed"))
+
+        message = make_message("research OAuth options and commit it")
+        await bot._handle_message(message)
+
+        assert message.channel.send.call_count == 2
+        warning_msg = message.channel.send.call_args_list[1][0][0]
+        assert "⚠️" in warning_msg
+        assert "repo" in warning_msg.lower()

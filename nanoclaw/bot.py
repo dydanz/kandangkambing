@@ -37,6 +37,17 @@ logging.basicConfig(
 logger = logging.getLogger("nanoclaw")
 
 
+def _format_doc_preview(content: str) -> str:
+    """Format document content for Discord (max ~1900 chars)."""
+    if len(content) <= 1900:
+        return content
+    truncated = content[:1900]
+    return truncated + (
+        "\n\n…Document truncated. "
+        "Ask me to save it to the repo for the full version."
+    )
+
+
 class NanoClawBot:
     """Discord bot that wires together all NanoClaw components."""
 
@@ -306,6 +317,22 @@ class NanoClawBot:
             response = decision.response
         elif decision.action == "clarify":
             response = decision.question
+        elif decision.action == "document":
+            discord_preview = _format_doc_preview(decision.document_content or "")
+            await target_channel.send(discord_preview)
+            if decision.save_to_repo and decision.doc_filename:
+                path = f"docs/research/{decision.doc_filename}"
+                try:
+                    await self.git.write_and_commit(
+                        path=path,
+                        content=decision.document_content or "",
+                        message=f"docs(cto): add research doc — {decision.doc_title}",
+                    )
+                    await target_channel.send(f"📄 Saved to `{path}`")
+                except Exception as e:
+                    logger.error("git.write_and_commit failed: %s", e)
+                    await target_channel.send("⚠️ Could not save to repo")
+            response = None
         else:
             response = await self.orchestrator.handle(
                 command=command,
