@@ -66,6 +66,45 @@ class CTOAgent(BaseAgent):
         decision = self._parse_decision(raw)
         return self._apply_destructive_guard(decision)
 
+    async def research(self, topic: str, doc_title: str, session_id: str) -> str:
+        """Deep Sonnet LLM pass — generates a structured markdown research document."""
+        research_prompt_path = Path("config/prompts/cto_research_prompt.md")
+        if research_prompt_path.exists():
+            system = research_prompt_path.read_text().strip()
+        else:
+            system = "You are a technical researcher. Generate structured markdown documents."
+
+        messages = [
+            {"role": "system", "content": system},
+            {
+                "role": "user",
+                "content": (
+                    f"Topic: {topic}\n"
+                    f"Document title: {doc_title}\n\n"
+                    "Produce the full research document now."
+                ),
+            },
+        ]
+
+        response = await self.router.route(
+            task_type="research",
+            messages=messages,
+            session_id=session_id,
+            agent=self.name,
+        )
+
+        await self.memory.save_message(
+            role=self.name,
+            agent=self.name,
+            content=response.content,
+            task_id=None,
+            model=response.model,
+            tokens_in=response.tokens_in,
+            tokens_out=response.tokens_out,
+            cost_usd=response.cost_usd,
+        )
+        return response.content
+
     @staticmethod
     def _apply_destructive_guard(decision: CTODecision) -> CTODecision:
         """Downgrade execute decisions with destructive keywords to clarify."""

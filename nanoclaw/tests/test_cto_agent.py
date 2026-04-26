@@ -272,3 +272,43 @@ def test_parse_decision_document_missing_doc_fields_returns_clarify():
     })
     decision = CTOAgent._parse_decision(raw)
     assert decision.action == "clarify"
+
+
+# --- research() method ---
+
+@pytest.mark.asyncio
+async def test_research_returns_markdown_string():
+    markdown_doc = "# OAuth 2.0 Options\n\n## Summary\nThree flows are relevant..."
+    agent = make_cto_agent(markdown_doc)
+    agent.router.route = AsyncMock(return_value=LLMResponse(
+        content=markdown_doc,
+        model="claude-sonnet-4-6",
+        provider="anthropic",
+        tokens_in=100,
+        tokens_out=200,
+        cost_usd=0.001,
+    ))
+    result = await agent.research(
+        topic="research OAuth options",
+        doc_title="OAuth 2.0 Options — Technical Brief",
+        session_id="s1",
+    )
+    assert result == markdown_doc
+    call_kwargs = agent.router.route.call_args.kwargs
+    assert call_kwargs["task_type"] == "research"
+
+
+@pytest.mark.asyncio
+async def test_research_saves_to_memory():
+    markdown_doc = "# Test Doc\n\n## Summary\nContent here."
+    agent = make_cto_agent(markdown_doc)
+    agent.router.route = AsyncMock(return_value=LLMResponse(
+        content=markdown_doc,
+        model="claude-sonnet-4-6",
+        provider="anthropic",
+        tokens_in=100,
+        tokens_out=200,
+        cost_usd=0.001,
+    ))
+    await agent.research("document auth architecture", "Auth Architecture", "s1")
+    agent.memory.save_message.assert_called_once()
