@@ -66,7 +66,7 @@ class CTOAgent(BaseAgent):
             return decision
         command_words = set(decision.command.lower().split())
         if command_words & _DESTRUCTIVE_KEYWORDS:
-            logger.info("CTOAgent: destructive guard triggered for: %s", decision.command)
+            logger.warning("CTOAgent: destructive guard triggered for: %s", decision.command)
             return _DESTRUCTIVE_CLARIFY
         return decision
 
