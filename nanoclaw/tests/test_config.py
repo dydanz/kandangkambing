@@ -61,5 +61,5 @@ def test_fallback_chain_structure(settings_path):
 def test_llm_routing_keys(settings_path):
     """All expected routing keys are present."""
     settings = Settings.load(settings_path)
-    expected_keys = {"coding", "review", "spec", "simple", "test", "summarise"}
+    expected_keys = {"coding", "review", "spec", "simple", "test", "summarise", "cto"}
     assert set(settings.llm.routing.keys()) == expected_keys
