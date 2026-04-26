@@ -1,8 +1,10 @@
 """CTOAgent — natural language interface layer for NanoClaw."""
+import dataclasses
 import json
 import logging
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 from agents.base import BaseAgent
 
@@ -11,13 +13,18 @@ logger = logging.getLogger("nanoclaw.agents.cto")
 
 @dataclass(frozen=True)
 class CTODecision:
-    action: str           # "execute" | "respond" | "clarify"
+    action: str           # "execute" | "respond" | "clarify" | "document"
     command: str | None   # orchestrator command string (action=execute only)
     response: str | None  # direct answer (action=respond only)
     question: str | None  # one clarifying question (action=clarify only)
-    intent: str           # "coding"|"debugging"|"planning"|"analysis"|"system"|"unclear"
+    intent: str           # "coding"|"debugging"|"planning"|"analysis"|"system"|"research"|"unclear"
     confidence: float     # 0.0–1.0
     reasoning: str        # internal note, not shown to user
+    # document-action fields (None/False for all other actions)
+    doc_title: str | None = None
+    doc_filename: str | None = None
+    save_to_repo: bool = False
+    document_content: str | None = None
 
 
 _FALLBACK_DECISION = CTODecision(
@@ -57,7 +64,63 @@ class CTOAgent(BaseAgent):
             return _FALLBACK_DECISION
 
         decision = self._parse_decision(raw)
-        return self._apply_destructive_guard(decision)
+        decision = self._apply_destructive_guard(decision)
+
+        if decision.action == "document":
+            try:
+                content = await self.research(
+                    topic=message,
+                    doc_title=decision.doc_title or "Research Document",
+                    session_id=session_id,
+                )
+                decision = dataclasses.replace(decision, document_content=content)
+            except Exception as e:
+                logger.error("CTOAgent.research() failed: %s", e)
+                return dataclasses.replace(
+                    _FALLBACK_DECISION,
+                    question="I couldn't generate the document — try again?",
+                )
+
+        return decision
+
+    async def research(self, topic: str, doc_title: str, session_id: str) -> str:
+        """Deep Sonnet LLM pass — generates a structured markdown research document."""
+        research_prompt_path = Path("config/prompts/cto_research_prompt.md")
+        if research_prompt_path.exists():
+            system = research_prompt_path.read_text().strip()
+        else:
+            system = "You are a technical researcher. Generate structured markdown documents."
+
+        messages = [
+            {"role": "system", "content": system},
+            {
+                "role": "user",
+                "content": (
+                    f"Topic: {topic}\n"
+                    f"Document title: {doc_title}\n\n"
+                    "Produce the full research document now."
+                ),
+            },
+        ]
+
+        response = await self.router.route(
+            task_type="research",
+            messages=messages,
+            session_id=session_id,
+            agent=self.name,
+        )
+
+        await self.memory.save_message(
+            role=self.name,
+            agent=self.name,
+            content=response.content,
+            task_id=None,
+            model=response.model,
+            tokens_in=response.tokens_in,
+            tokens_out=response.tokens_out,
+            cost_usd=response.cost_usd,
+        )
+        return response.content
 
     @staticmethod
     def _apply_destructive_guard(decision: CTODecision) -> CTODecision:
@@ -94,10 +157,15 @@ class CTOAgent(BaseAgent):
             logger.warning("CTOAgent: missing fields: %s", required - data.keys())
             return _FALLBACK_DECISION
 
-        valid_actions = {"execute", "respond", "clarify"}
+        valid_actions = {"execute", "respond", "clarify", "document"}
         if data.get("action") not in valid_actions:
             logger.warning("CTOAgent: unknown action '%s'", data.get("action"))
             return _FALLBACK_DECISION
+
+        if data.get("action") == "document":
+            if not data.get("doc_title") or not data.get("doc_filename"):
+                logger.warning("CTOAgent: document action missing doc_title/doc_filename")
+                return _FALLBACK_DECISION
 
         try:
             return CTODecision(
@@ -108,6 +176,10 @@ class CTOAgent(BaseAgent):
                 intent=str(data["intent"]),
                 confidence=float(data["confidence"]),
                 reasoning=str(data["reasoning"]),
+                doc_title=data.get("doc_title"),
+                doc_filename=data.get("doc_filename"),
+                save_to_repo=bool(data.get("save_to_repo", False)),
+                document_content=None,
             )
         except (TypeError, ValueError) as e:
             logger.warning("CTOAgent: field type error: %s", e)
