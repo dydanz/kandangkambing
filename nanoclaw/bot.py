@@ -1,6 +1,7 @@
 """NanoClaw Discord Bot — entry point with full message/reaction handling."""
 import asyncio
 import logging
+import uuid
 import os
 import subprocess
 import sys
@@ -20,6 +21,7 @@ from agents.pm import PMAgent
 from agents.dev import DevAgent
 from agents.qa import QAAgent
 from agents.code_reviewer import CodeReviewerAgent
+from agents.cto_agent import CTOAgent
 from workflow.engine import WorkflowEngine
 from workflow.approval_gate import ApprovalGate, APPROVE_EMOJI, REJECT_EMOJI
 from workflow.job_queue import JobQueue, Job
@@ -86,6 +88,7 @@ class NanoClawBot:
         self.code_reviewer = CodeReviewerAgent(
             self.router, self.memory, self.context_loader, self.git,
         )
+        self.cto = CTOAgent(self.router, self.memory, self.context_loader)
 
         # Approval gate
         self.approval_gate = ApprovalGate(
@@ -226,7 +229,8 @@ class NanoClawBot:
             return
 
         # Must mention the bot
-        if self.client.user not in message.mentions:
+        bot_id = self.client.user.id if self.client.user else None
+        if bot_id is None or not any(m.id == bot_id for m in message.mentions):
             return
 
         # Whitelist check — silent ignore for non-allowed users
@@ -246,18 +250,30 @@ class NanoClawBot:
             await message.channel.send("Usage: `@NanoClaw <command>`")
             return
 
-        # Create or use thread for task-level commands
+        # Run CTO Agent intent classification
+        session_id = None
+        decision = None
+        try:
+            pre_thread_id = (str(message.channel.id)
+                             if isinstance(message.channel, discord.Thread)
+                             else None)
+            session_id = pre_thread_id or str(uuid.uuid4())
+            decision = await self.cto.process(command, session_id=session_id)
+        except Exception as e:
+            logger.error("CTOAgent.process failed, falling back to orchestrator: %s", e)
+
+        # Create or use thread — driven by decision, not keyword matching
         thread = None
         if isinstance(message.channel, discord.Thread):
             thread = message.channel
-        elif self._is_task_command(command):
+        elif decision and decision.action == "execute":
             thread = await message.create_thread(
                 name=f"NanoClaw: {command[:80]}",
                 auto_archive_duration=1440,
             )
 
-        # Build progress callback that posts to the thread (or channel)
         target_channel = thread or message.channel
+        session_id = str(thread.id) if thread else session_id
 
         async def progress_callback(msg: str):
             try:
@@ -265,13 +281,32 @@ class NanoClawBot:
             except Exception as e:
                 logger.error("Failed to send progress: %s", e)
 
-        # Route through orchestrator
-        response = await self.orchestrator.handle(
-            command=command,
-            user_id=str(message.author.id),
-            thread_id=str(target_channel.id) if thread else None,
-            progress_callback=progress_callback,
-        )
+        # Route based on CTO decision
+        if decision is None:
+            response = await self.orchestrator.handle(
+                command=command,
+                user_id=str(message.author.id),
+                thread_id=str(target_channel.id) if thread else None,
+                progress_callback=progress_callback,
+            )
+        elif decision.action == "execute":
+            response = await self.orchestrator.handle(
+                command=decision.command,
+                user_id=str(message.author.id),
+                thread_id=str(target_channel.id) if thread else None,
+                progress_callback=progress_callback,
+            )
+        elif decision.action == "respond":
+            response = decision.response
+        elif decision.action == "clarify":
+            response = decision.question
+        else:
+            response = await self.orchestrator.handle(
+                command=command,
+                user_id=str(message.author.id),
+                thread_id=str(target_channel.id) if thread else None,
+                progress_callback=progress_callback,
+            )
 
         if response:
             await target_channel.send(response)
@@ -326,14 +361,6 @@ class NanoClawBot:
             f"${self.settings.budget.daily_limit_usd:.2f} limit"
         )
         await channel.send(report)
-
-    @staticmethod
-    def _is_task_command(command: str) -> bool:
-        """Return True if this command will produce task output worth threading."""
-        cmd_lower = command.lower()
-        return any(cmd_lower.startswith(prefix) for prefix in (
-            "pm ", "dev ", "implement ", "build ", "feature ", "review ",
-        ))
 
     def run(self):
         token = os.environ.get("DISCORD_BOT_TOKEN")
