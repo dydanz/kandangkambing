@@ -39,6 +39,7 @@ SAMPLE_SETTINGS = {
             "simple": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
             "test": {"provider": "anthropic", "model": "claude-sonnet-4-6"},
             "summarise": {"provider": "google", "model": "gemini-2.0-flash"},
+            "cto": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
         },
         "fallback_chain": [
             ["anthropic", "claude-sonnet-4-6"],

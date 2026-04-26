@@ -29,7 +29,8 @@
       "spec":      {"provider": "anthropic", "model": "claude-sonnet-4-6"},
       "simple":    {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
       "test":      {"provider": "anthropic", "model": "claude-sonnet-4-6"},
-      "summarise": {"provider": "google",    "model": "gemini-2.5-flash-lite"}
+      "summarise": {"provider": "google",    "model": "gemini-2.5-flash-lite"},
+      "cto":       {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"}
     },
     "fallback_chain": [
       ["anthropic", "claude-sonnet-4-6"],
