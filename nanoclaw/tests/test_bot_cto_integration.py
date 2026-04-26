@@ -9,41 +9,7 @@ import discord
 from agents.cto_agent import CTODecision
 from config.settings import Settings
 
-
-SETTINGS_DICT = {
-    "discord": {"allowed_user_ids": ["123456789"],
-                "command_channel_id": "1", "log_channel_id": "2",
-                "commits_channel_id": "3"},
-    "workflow": {"max_retries": 2, "approval_timeout_minutes": 60,
-                 "job_timeout_minutes": 10, "max_concurrent_jobs": 2},
-    "rate_limits": {"llm_calls_per_hour": 30, "claude_code_per_hour": 10,
-                    "git_pushes_per_hour": 5, "cooldown_minutes": 10},
-    "budget": {"daily_limit_usd": 5.0, "warn_at_percent": 0.8,
-               "daily_report_time": "09:00"},
-    "llm": {
-        "routing": {
-            "coding": {"provider": "anthropic", "model": "claude-sonnet-4-6"},
-            "review": {"provider": "anthropic", "model": "claude-sonnet-4-6"},
-            "spec": {"provider": "openai", "model": "gpt-4o"},
-            "simple": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
-            "test": {"provider": "anthropic", "model": "claude-sonnet-4-6"},
-            "summarise": {"provider": "google", "model": "gemini-2.0-flash"},
-            "cto": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
-        },
-        "fallback_chain": [["anthropic", "claude-sonnet-4-6"]]
-    },
-    "paths": {"project_path": "/tmp/p", "worktree_base": "/tmp/w",
-              "github_repo": "test/repo"}
-}
-
-BOT_PATCHES = [
-    "bot.discord.Client", "bot.SharedMemory", "bot.TaskStore",
-    "bot.CostTracker", "bot.ContextLoader", "bot.LLMRouter",
-    "bot.ClaudeCodeTool", "bot.VerificationLayer", "bot.GitTool",
-    "bot.PMAgent", "bot.DevAgent", "bot.QAAgent", "bot.ApprovalGate",
-    "bot.JobQueue", "bot.WorkflowEngine", "bot.BudgetGuard",
-    "bot.RateLimiter", "bot.DailyScheduler", "bot.CTOAgent",
-]
+from tests.conftest import SAMPLE_SETTINGS
 
 
 def make_decision(action, command=None, response=None, question=None,
@@ -60,7 +26,6 @@ def make_message(content="fix the login bug", author_id="123456789"):
     message.content = f"<@999> {content}"
     message.author = MagicMock()
     message.author.id = int(author_id)
-    message.author.__eq__ = lambda self, other: False
     message.mentions = [MagicMock(id=999)]
     message.channel = MagicMock(spec=discord.TextChannel)
     message.channel.send = AsyncMock()
@@ -73,7 +38,7 @@ def make_message(content="fix the login bug", author_id="123456789"):
 
 def _load_settings():
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-        json.dump(SETTINGS_DICT, f)
+        json.dump(SAMPLE_SETTINGS, f)
         fname = f.name
     return Settings.load(fname)
 
@@ -100,6 +65,7 @@ async def test_handle_message_execute_routes_to_orchestrator():
          patch("bot.BudgetGuard"), \
          patch("bot.RateLimiter"), \
          patch("bot.DailyScheduler"), \
+         patch("bot.Auth"), \
          patch("bot.CTOAgent"):
 
         bot = NanoClawBot(_load_settings())
@@ -114,6 +80,7 @@ async def test_handle_message_execute_routes_to_orchestrator():
 
         bot.orchestrator.handle.assert_called_once()
         assert bot.orchestrator.handle.call_args.kwargs["command"] == "feature fix login bug"
+        assert bot.orchestrator.handle.call_args.kwargs["user_id"] == "123456789"
 
 
 @pytest.mark.asyncio
@@ -138,6 +105,7 @@ async def test_handle_message_respond_posts_directly():
          patch("bot.BudgetGuard"), \
          patch("bot.RateLimiter"), \
          patch("bot.DailyScheduler"), \
+         patch("bot.Auth"), \
          patch("bot.CTOAgent"):
 
         bot = NanoClawBot(_load_settings())
@@ -158,6 +126,7 @@ async def test_handle_message_respond_posts_directly():
         message.channel.send.assert_called_once_with(
             "Auth is slow because of missing indexes."
         )
+        message.create_thread.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -182,6 +151,7 @@ async def test_handle_message_cto_failure_falls_back_to_orchestrator():
          patch("bot.BudgetGuard"), \
          patch("bot.RateLimiter"), \
          patch("bot.DailyScheduler"), \
+         patch("bot.Auth"), \
          patch("bot.CTOAgent"):
 
         bot = NanoClawBot(_load_settings())
@@ -195,3 +165,50 @@ async def test_handle_message_cto_failure_falls_back_to_orchestrator():
 
         bot.orchestrator.handle.assert_called_once()
         assert bot.orchestrator.handle.call_args.kwargs["command"] == "feature add health check"
+
+
+@pytest.mark.asyncio
+async def test_handle_message_clarify_posts_question():
+    from bot import NanoClawBot
+
+    with patch("bot.discord.Client"), \
+         patch("bot.SharedMemory"), \
+         patch("bot.TaskStore"), \
+         patch("bot.CostTracker"), \
+         patch("bot.ContextLoader"), \
+         patch("bot.LLMRouter"), \
+         patch("bot.ClaudeCodeTool"), \
+         patch("bot.VerificationLayer"), \
+         patch("bot.GitTool"), \
+         patch("bot.PMAgent"), \
+         patch("bot.DevAgent"), \
+         patch("bot.QAAgent"), \
+         patch("bot.ApprovalGate"), \
+         patch("bot.JobQueue"), \
+         patch("bot.WorkflowEngine"), \
+         patch("bot.BudgetGuard"), \
+         patch("bot.RateLimiter"), \
+         patch("bot.DailyScheduler"), \
+         patch("bot.CTOAgent"), \
+         patch("bot.Auth"):
+
+        bot = NanoClawBot(_load_settings())
+        bot.client.user = MagicMock(id=999)
+
+        clarify_decision = make_decision(
+            "clarify",
+            question="Which part needs improvement — performance, UX, or something specific?",
+            intent="unclear",
+            confidence=0.2,
+        )
+        bot.cto.process = AsyncMock(return_value=clarify_decision)
+        bot.orchestrator.handle = AsyncMock()
+
+        message = make_message("make it better")
+        await bot._handle_message(message)
+
+        bot.orchestrator.handle.assert_not_called()
+        message.create_thread.assert_not_called()
+        message.channel.send.assert_called_once_with(
+            "Which part needs improvement — performance, UX, or something specific?"
+        )
