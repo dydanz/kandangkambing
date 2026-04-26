@@ -235,3 +235,40 @@ def test_settings_has_research_route(settings_path):
     s = Settings.load(settings_path)
     assert "research" in s.llm.routing
     assert s.llm.routing["research"].model == "claude-sonnet-4-6"
+
+
+# --- document action parsing ---
+
+def test_parse_decision_document_action():
+    raw = json.dumps({
+        "action": "document",
+        "command": None,
+        "response": None,
+        "question": None,
+        "intent": "research",
+        "confidence": 0.9,
+        "reasoning": "technical brief requested",
+        "doc_title": "OAuth 2.0 Options — Technical Brief",
+        "doc_filename": "oauth-2-options.md",
+        "save_to_repo": True,
+    })
+    decision = CTOAgent._parse_decision(raw)
+    assert decision.action == "document"
+    assert decision.doc_title == "OAuth 2.0 Options — Technical Brief"
+    assert decision.doc_filename == "oauth-2-options.md"
+    assert decision.save_to_repo is True
+    assert decision.document_content is None
+
+
+def test_parse_decision_document_missing_doc_fields_returns_clarify():
+    raw = json.dumps({
+        "action": "document",
+        "command": None,
+        "response": None,
+        "question": None,
+        "intent": "research",
+        "confidence": 0.9,
+        "reasoning": "missing doc fields",
+    })
+    decision = CTOAgent._parse_decision(raw)
+    assert decision.action == "clarify"
