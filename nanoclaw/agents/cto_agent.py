@@ -48,10 +48,27 @@ class CTOAgent(BaseAgent):
     task_type = "cto"
     prompt_file = "config/prompts/cto_prompt.md"
 
-    # process() and _apply_destructive_guard() are defined in cto_agent.py
-    # but implemented in the next task. This skeleton exposes _parse_decision
-    # for isolated testing. The destructive-guard constants (_DESTRUCTIVE_CLARIFY,
-    # _DESTRUCTIVE_KEYWORDS) are defined at module level ready for use in process().
+    async def process(self, message: str, session_id: str) -> CTODecision:
+        """Classify message intent via LLM and return a routing decision."""
+        try:
+            raw = await self.handle(message, session_id=session_id)
+        except Exception as e:
+            logger.error("CTOAgent LLM call failed: %s", e)
+            return _FALLBACK_DECISION
+
+        decision = self._parse_decision(raw)
+        return self._apply_destructive_guard(decision)
+
+    @staticmethod
+    def _apply_destructive_guard(decision: CTODecision) -> CTODecision:
+        """Downgrade execute decisions with destructive keywords to clarify."""
+        if decision.action != "execute" or not decision.command:
+            return decision
+        command_words = set(decision.command.lower().split())
+        if command_words & _DESTRUCTIVE_KEYWORDS:
+            logger.info("CTOAgent: destructive guard triggered for: %s", decision.command)
+            return _DESTRUCTIVE_CLARIFY
+        return decision
 
     @staticmethod
     def _parse_decision(raw: str) -> CTODecision:
