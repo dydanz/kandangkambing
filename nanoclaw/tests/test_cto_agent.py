@@ -228,3 +228,10 @@ async def test_process_fallback_on_llm_failure():
     agent.router.route = AsyncMock(side_effect=Exception("LLM timeout"))
     decision = await agent.process("do something", session_id="s1")
     assert decision.action == "clarify"
+
+
+def test_settings_has_research_route(settings_path):
+    from config.settings import Settings
+    s = Settings.load(settings_path)
+    assert "research" in s.llm.routing
+    assert s.llm.routing["research"].model == "claude-sonnet-4-6"
