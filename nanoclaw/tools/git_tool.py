@@ -215,6 +215,20 @@ class GitTool(Tool):
             error = stderr.decode().strip()
             raise RuntimeError(f"gh pr review failed: {error}")
 
+    async def write_and_commit(self, path: str, content: str, message: str) -> None:
+        """Write content to path in project_path, stage, and commit.
+
+        Writes directly to the main repo (not a worktree) — research docs are
+        reference material committed to main, not feature branches.
+        Raises on git failure.
+        """
+        full_path = Path(self.repo.working_dir) / path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        full_path.write_text(content, encoding="utf-8")
+        self.repo.git.add(path)
+        self.repo.index.commit(message)
+        logger.info("Committed research doc: %s", path)
+
     async def run(self, input: str, **kwargs) -> ToolResult:
         """Generic Tool interface — not used directly; use specific methods."""
         return ToolResult(
