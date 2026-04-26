@@ -29,12 +29,16 @@ class Orchestrator:
                  task_store: TaskStore,
                  job_queue: JobQueue,
                  cost_tracker: CostTracker,
+                 code_reviewer=None,
+                 approval_gate=None,
                  rate_limiter: RateLimiter | None = None,
                  budget_guard: BudgetGuard | None = None):
         self.engine = engine
         self.task_store = task_store
         self.job_queue = job_queue
         self.cost_tracker = cost_tracker
+        self.code_reviewer = code_reviewer
+        self.approval_gate = approval_gate
         self.rate_limiter = rate_limiter
         self.budget_guard = budget_guard
 
@@ -60,8 +64,17 @@ class Orchestrator:
         if keyword == "cost":
             return await self._handle_cost()
 
-        # Safety checks for work commands
-        if keyword in ("pm", "dev", "feature", "build", "implement"):
+        # review override makes no LLM calls — exempt from safety gates
+        if keyword == "review" and len(parts) >= 2 and parts[1].lower() == "override":
+            raw = parts[2] if len(parts) >= 3 else None
+            try:
+                pr_number = int(raw) if raw else None
+            except ValueError:
+                pr_number = None
+            return await self._handle_review_override(pr_number)
+
+        # Safety checks for work commands (review override already handled above)
+        if keyword in ("pm", "dev", "feature", "build", "implement", "review"):
             blocked = await self._check_safety_gates()
             if blocked:
                 return blocked
@@ -93,6 +106,15 @@ class Orchestrator:
                 return await self._handle_pm_define(
                     instruction, thread_id, progress_callback,
                 )
+
+        # Review command (override already handled before safety gate above)
+        if keyword == "review":
+            raw = parts[1] if len(parts) >= 2 else None
+            try:
+                pr_number = int(raw) if raw else None
+            except ValueError:
+                return "Usage: `review <pr_number>` — pr_number must be a valid integer"
+            return await self._handle_review(pr_number, thread_id, progress_callback)
 
         return self._usage()
 
@@ -207,6 +229,56 @@ class Orchestrator:
             return "No LLM costs recorded today."
         return f"**Today's LLM spend:** ${daily:.4f}"
 
+    async def _handle_review(self, pr_number: int | None,
+                             thread_id, progress_callback) -> str:
+        if pr_number is None:
+            return "Usage: `review <pr_number>`"
+        if not self.code_reviewer:
+            return "Code reviewer not configured."
+
+        session_id = str(uuid.uuid4())
+
+        async def job_fn():
+            review = await self.code_reviewer.review(
+                pr_number=pr_number, session_id=session_id,
+            )
+            if progress_callback:
+                from agents.code_reviewer import CodeReviewerAgent
+                summary = CodeReviewerAgent.format_discord_summary(review)
+                await progress_callback(summary)
+
+        async def on_error_fn(exc: Exception) -> None:
+            if progress_callback:
+                await progress_callback(
+                    f"Code review for PR #{pr_number} failed: {exc}"
+                )
+
+        job = Job(
+            id=f"review-{pr_number}-{session_id[:8]}",
+            fn=job_fn,
+            on_error=on_error_fn,
+            discord_thread_id=thread_id,
+        )
+        await self.job_queue.enqueue(job)
+        return f"Queued code review for PR #{pr_number}."
+
+    async def _handle_review_override(self, pr_number: int | None) -> str:
+        if pr_number is None:
+            return "Usage: `review override <pr_number>`"
+        if not self.approval_gate:
+            return "Approval gate not configured."
+
+        resolved = self.approval_gate.resolve_by_pr(pr_number, True)
+        if resolved:
+            return (
+                f"Override applied: PR #{pr_number} force-approved. "
+                f"Pipeline will proceed."
+            )
+        return (
+            f"No pending approval gate found for PR #{pr_number}. "
+            f"Nothing to override."
+        )
+
     @staticmethod
     def _format_feature_result(result: dict) -> str:
         tasks = result.get("tasks", [])
@@ -230,6 +302,8 @@ class Orchestrator:
             "  `PM define <instruction>` — Create spec + tasks\n"
             "  `Dev implement <task_id>` — Implement a specific task\n"
             "  `feature <instruction>` — Shorthand for PM define\n"
+            "  `review <pr_number>` — AI code review on any PR\n"
+            "  `review override <pr_number>` — Force-approve a PR blocked by critical findings\n"
             "  `status` — Show current status\n"
             "  `cost` — Show today's LLM costs\n"
             "  `STOP` — Halt job queue\n"

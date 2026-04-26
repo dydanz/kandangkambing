@@ -1,4 +1,5 @@
 """WorkflowEngine — PM→Dev→QA orchestration loop with retry and approval."""
+import asyncio
 import json
 import logging
 import uuid
@@ -7,6 +8,7 @@ from typing import Callable, Awaitable, Optional
 from agents.pm import PMAgent
 from agents.dev import DevAgent
 from agents.qa import QAAgent
+from agents.code_reviewer import CodeReviewerAgent
 from memory.task_store import TaskStore
 from workflow.approval_gate import ApprovalGate
 
@@ -18,12 +20,14 @@ DEFAULT_MAX_RETRIES = 2
 
 class WorkflowEngine:
     def __init__(self, pm: PMAgent, dev: DevAgent, qa: QAAgent,
+                 code_reviewer: CodeReviewerAgent,
                  task_store: TaskStore, approval_gate: ApprovalGate,
                  max_retries: int = DEFAULT_MAX_RETRIES,
                  progress_callback: Optional[Callable] = None):
         self.pm = pm
         self.dev = dev
         self.qa = qa
+        self.code_reviewer = code_reviewer
         self.task_store = task_store
         self.gate = approval_gate
         self._max_retries = max_retries
@@ -79,12 +83,7 @@ class WorkflowEngine:
         return await self._run_task(task, session_id)
 
     async def _run_task(self, task: dict, session_id: str) -> dict:
-        """Dev → QA → retry loop for one task.
-
-        retry_count is incremented ONCE per failed attempt,
-        regardless of whether failure came from verification or QA.
-        Only incremented when a subsequent attempt will follow.
-        """
+        """Dev → QA → commit/push → CodeReview → gate loop for one task."""
         max_retries = task.get("max_retries", self._max_retries)
         for attempt in range(max_retries + 1):
             await self._progress(
@@ -110,31 +109,87 @@ class WorkflowEngine:
                 task=task, dev_result=dev_result, session_id=session_id
             )
 
-            if qa_result["passed"]:
-                await self._progress(
-                    f"{task['id']} ready — awaiting your approval"
-                )
-                approved = await self.gate.request(task, dev_result)
-                if approved:
-                    pr_url = await self.dev.commit_and_push(task, dev_result)
-                    return {"task_id": task["id"], "success": True,
-                            "pr_url": pr_url}
-                else:
+            if not qa_result["passed"]:
+                if attempt >= max_retries:
+                    await self._progress(
+                        f"{task['id']} failed after {max_retries} retries. "
+                        f"Manual intervention needed."
+                    )
                     await self.task_store.update(task["id"], status="failed")
                     return {"task_id": task["id"], "success": False,
-                            "reason": "rejected by user"}
+                            "reason": "max retries exceeded",
+                            "qa_result": qa_result}
+                await self.task_store.increment_retry(task["id"])
+                continue
 
-            # QA failed
-            if attempt >= max_retries:
-                await self._progress(
-                    f"{task['id']} failed after {max_retries} retries. "
-                    f"Manual intervention needed."
-                )
+            # QA passed — create PR
+            await self._progress(f"{task['id']} QA passed — creating PR...")
+            try:
+                pr_info = await self.dev.commit_and_push(task, dev_result)
+            except Exception as exc:
+                logger.warning("commit_and_push failed for %s: %s", task["id"], exc)
                 await self.task_store.update(task["id"], status="failed")
                 return {"task_id": task["id"], "success": False,
-                        "reason": "max retries exceeded",
-                        "qa_result": qa_result}
-            await self.task_store.increment_retry(task["id"])
+                        "reason": f"commit/push failed: {exc}"}
+
+            # Run code review
+            await self._progress(
+                f"PR created: {pr_info.url} — running code review..."
+            )
+            try:
+                review = await self.code_reviewer.review(
+                    pr_number=pr_info.number,
+                    task_id=task["id"],
+                    session_id=session_id,
+                )
+                review_summary = CodeReviewerAgent.format_discord_summary(review)
+                has_critical = review.has_critical
+            except Exception as exc:
+                logger.warning(
+                    "Code review failed for PR #%d: %s — proceeding to gate without review",
+                    pr_info.number, exc,
+                )
+                review_summary = f"⚠️ Code review failed: {exc}. Proceeding to manual approval."
+                has_critical = False
+
+            if has_critical:
+                await self._progress(
+                    f"🔴 Critical issues found on PR #{pr_info.number}. "
+                    f"Fix them and merge on GitHub, or use "
+                    f"`review override {pr_info.number}` to force-approve.\n\n"
+                    + review_summary
+                )
+                merge_task = asyncio.create_task(
+                    self.gate.wait_for_github_merge(pr_info.number)
+                )
+                try:
+                    merged = await asyncio.wait_for(
+                        merge_task, timeout=self.gate.timeout,
+                    )
+                except asyncio.TimeoutError:
+                    merge_task.cancel()
+                    logger.info(
+                        "GitHub merge wait timed out for PR #%d after %d minutes",
+                        pr_info.number, self.gate.timeout // 60,
+                    )
+                    merged = False
+                return {"task_id": task["id"], "success": merged,
+                        "pr_url": pr_info.url}
+
+            await self._progress(
+                f"✅ Code review complete. Awaiting your approval.\n\n"
+                + review_summary
+            )
+            approved = await self.gate.request(
+                task, dev_result, pr_info=pr_info
+            )
+            if approved:
+                return {"task_id": task["id"], "success": True,
+                        "pr_url": pr_info.url}
+            else:
+                await self.task_store.update(task["id"], status="failed")
+                return {"task_id": task["id"], "success": False,
+                        "reason": "rejected by user", "pr_url": pr_info.url}
 
         return {"task_id": task["id"], "success": False, "reason": "unknown"}
 

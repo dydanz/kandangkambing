@@ -5,7 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from agents.dev import DevResult
+from agents.dev import DevResult, PRInfo
+from agents.code_reviewer import CodeReviewerAgent, ReviewResult, Finding
 from workflow.engine import WorkflowEngine, DEFAULT_MAX_RETRIES
 from workflow.job_queue import JobQueue, Job
 from workflow.approval_gate import ApprovalGate, APPROVE_EMOJI, REJECT_EMOJI
@@ -61,7 +62,11 @@ def mock_pm():
 def mock_dev():
     dev = MagicMock()
     dev.implement = AsyncMock(return_value=make_dev_result())
-    dev.commit_and_push = AsyncMock(return_value="https://github.com/pr/1")
+    dev.commit_and_push = AsyncMock(
+        return_value=PRInfo(
+            url="https://github.com/owner/repo/pull/1", number=1
+        )
+    )
     return dev
 
 
@@ -94,10 +99,35 @@ def mock_gate():
     return gate
 
 
+def make_review_result(has_critical=False, pr_number=1):
+    critical = [
+        Finding(location="a.py:1", issue="SQL injection", fix="Use params")
+    ] if has_critical else []
+    return ReviewResult(
+        pr_number=pr_number,
+        critical=critical,
+        important=[],
+        suggestions=[],
+        positives=["Clean code"],
+        summary="Review complete.",
+        github_comment_posted=True,
+    )
+
+
 @pytest.fixture
-def engine(mock_pm, mock_dev, mock_qa, mock_task_store, mock_gate):
+def mock_code_reviewer():
+    reviewer = MagicMock()
+    reviewer.review = AsyncMock(return_value=make_review_result())
+    reviewer.format_discord_summary = CodeReviewerAgent.format_discord_summary
+    return reviewer
+
+
+@pytest.fixture
+def engine(mock_pm, mock_dev, mock_qa, mock_code_reviewer,
+           mock_task_store, mock_gate):
     return WorkflowEngine(
         pm=mock_pm, dev=mock_dev, qa=mock_qa,
+        code_reviewer=mock_code_reviewer,
         task_store=mock_task_store,
         approval_gate=mock_gate,
     )
@@ -111,7 +141,7 @@ async def test_run_feature_success(engine, mock_pm, mock_dev, mock_qa, mock_gate
     assert result["session_id"]
     assert len(result["tasks"]) == 1
     assert result["tasks"][0]["success"] is True
-    assert result["tasks"][0]["pr_url"] == "https://github.com/pr/1"
+    assert result["tasks"][0]["pr_url"] == "https://github.com/owner/repo/pull/1"
     mock_pm.handle.assert_called_once()
     mock_dev.implement.assert_called_once()
     mock_qa.handle.assert_called_once()
@@ -185,10 +215,12 @@ async def test_run_single_task_success(engine, mock_task_store):
 
 @pytest.mark.asyncio
 async def test_progress_callback_called(mock_pm, mock_dev, mock_qa,
-                                        mock_task_store, mock_gate):
+                                        mock_code_reviewer, mock_task_store,
+                                        mock_gate):
     progress = AsyncMock()
     engine = WorkflowEngine(
         pm=mock_pm, dev=mock_dev, qa=mock_qa,
+        code_reviewer=mock_code_reviewer,
         task_store=mock_task_store,
         approval_gate=mock_gate,
         progress_callback=progress,
@@ -519,3 +551,310 @@ async def test_orchestrator_unknown_command(orchestrator):
 async def test_orchestrator_empty_command(orchestrator):
     result = await orchestrator.handle("", "user1")
     assert "Commands:" in result
+
+
+# Helper — shared with new approval gate tests
+def make_pr_info(number=42):
+    return PRInfo(url=f"https://github.com/owner/repo/pull/{number}", number=number)
+
+
+# --- ApprovalGate dual-signal tests ---
+
+@pytest.mark.asyncio
+async def test_approval_gate_github_merge_resolves_gate():
+    """Gate resolves True when GitHub PR is merged before Discord reaction."""
+    bot = MagicMock()
+    channel = AsyncMock()
+    msg = AsyncMock()
+    channel.send = AsyncMock(return_value=msg)
+    bot.get_channel = MagicMock(return_value=channel)
+
+    git = MagicMock()
+    # First call returns OPEN, second returns MERGED
+    git.get_pr_state = AsyncMock(side_effect=["OPEN", "MERGED"])
+
+    gate = ApprovalGate(bot, git=git, timeout_minutes=1)
+    gate.timeout = 5.0
+    task = make_task()
+
+    result = await gate.request(task, make_dev_result(),
+                                pr_info=make_pr_info(),
+                                poll_interval_seconds=0.05)
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_approval_gate_github_close_resolves_false():
+    """Gate resolves False when GitHub PR is closed."""
+    bot = MagicMock()
+    channel = AsyncMock()
+    msg = AsyncMock()
+    channel.send = AsyncMock(return_value=msg)
+    bot.get_channel = MagicMock(return_value=channel)
+
+    git = MagicMock()
+    git.get_pr_state = AsyncMock(return_value="CLOSED")
+
+    gate = ApprovalGate(bot, git=git, timeout_minutes=1)
+    gate.timeout = 5.0
+    task = make_task()
+
+    result = await gate.request(task, make_dev_result(),
+                                pr_info=make_pr_info(),
+                                poll_interval_seconds=0.05)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_approval_gate_discord_wins_over_github():
+    """Discord reaction resolves gate before GitHub polling does."""
+    bot = MagicMock()
+    channel = AsyncMock()
+    msg = AsyncMock()
+    channel.send = AsyncMock(return_value=msg)
+    bot.get_channel = MagicMock(return_value=channel)
+
+    git = MagicMock()
+    git.get_pr_state = AsyncMock(return_value="OPEN")
+
+    gate = ApprovalGate(bot, git=git, timeout_minutes=1)
+    gate.timeout = 5.0
+    task = make_task()
+
+    async def approve_via_discord():
+        await asyncio.sleep(0.05)
+        gate.resolve("TASK-001", True)
+
+    asyncio.create_task(approve_via_discord())
+    result = await gate.request(task, make_dev_result(),
+                                pr_info=make_pr_info(),
+                                poll_interval_seconds=10)
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_approval_gate_resolve_by_pr():
+    """resolve_by_pr finds and resolves the gate for a given PR number."""
+    bot = MagicMock()
+    channel = AsyncMock()
+    msg = AsyncMock()
+    channel.send = AsyncMock(return_value=msg)
+    bot.get_channel = MagicMock(return_value=channel)
+
+    git = MagicMock()
+    git.get_pr_state = AsyncMock(return_value="OPEN")
+
+    gate = ApprovalGate(bot, git=git, timeout_minutes=1)
+    gate.timeout = 5.0
+    task = make_task()
+
+    async def override_after_delay():
+        await asyncio.sleep(0.05)
+        resolved = gate.resolve_by_pr(42, True)
+        assert resolved is True
+
+    asyncio.create_task(override_after_delay())
+    result = await gate.request(task, make_dev_result(),
+                                pr_info=make_pr_info(42),
+                                poll_interval_seconds=10)
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_approval_gate_resolve_by_pr_not_found():
+    """resolve_by_pr returns False when no gate exists for the PR number."""
+    bot = MagicMock()
+    gate = ApprovalGate(bot, timeout_minutes=1)
+    result = gate.resolve_by_pr(999, True)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_approval_gate_wait_for_github_merge_merged():
+    """wait_for_github_merge returns True when state becomes MERGED."""
+    bot = MagicMock()
+    git = MagicMock()
+    git.get_pr_state = AsyncMock(side_effect=["OPEN", "OPEN", "MERGED"])
+
+    gate = ApprovalGate(bot, git=git, timeout_minutes=1)
+    result = await gate.wait_for_github_merge(42, poll_interval_seconds=0.01)
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_approval_gate_wait_for_github_merge_closed():
+    """wait_for_github_merge returns False when state becomes CLOSED."""
+    bot = MagicMock()
+    git = MagicMock()
+    git.get_pr_state = AsyncMock(return_value="CLOSED")
+
+    gate = ApprovalGate(bot, git=git, timeout_minutes=1)
+    result = await gate.wait_for_github_merge(42, poll_interval_seconds=0.01)
+    assert result is False
+
+
+# --- WorkflowEngine code review tests ---
+
+@pytest.mark.asyncio
+async def test_run_feature_code_review_called_after_qa(
+    engine, mock_dev, mock_qa, mock_code_reviewer, mock_gate
+):
+    """Code review runs after QA passes, before approval gate."""
+    result = await engine.run_feature("Add health endpoint")
+    assert result["tasks"][0]["success"] is True
+    # commit_and_push called before code review
+    mock_dev.commit_and_push.assert_called_once()
+    mock_code_reviewer.review.assert_called_once()
+    # approval gate called after review
+    mock_gate.request.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_run_feature_critical_findings_skip_discord_gate(
+    mock_pm, mock_dev, mock_qa, mock_task_store
+):
+    """Critical findings bypass Discord gate — waits for GitHub merge only."""
+    gate = MagicMock()
+    gate.request = AsyncMock(return_value=True)
+    gate.wait_for_github_merge = AsyncMock(return_value=True)
+    gate.timeout = 3600  # numeric so asyncio.wait_for can compare it
+
+    reviewer = MagicMock()
+    reviewer.review = AsyncMock(
+        return_value=make_review_result(has_critical=True)
+    )
+    reviewer.format_discord_summary = CodeReviewerAgent.format_discord_summary
+
+    engine = WorkflowEngine(
+        pm=mock_pm, dev=mock_dev, qa=mock_qa,
+        code_reviewer=reviewer,
+        task_store=mock_task_store,
+        approval_gate=gate,
+    )
+    result = await engine.run_feature("Add feature")
+
+    # Discord gate NOT called for critical findings
+    gate.request.assert_not_called()
+    # GitHub merge waited on instead
+    gate.wait_for_github_merge.assert_called_once()
+    assert result["tasks"][0]["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_run_feature_pr_url_from_prinfo(engine):
+    """pr_url in result comes from PRInfo.url."""
+    result = await engine.run_feature("Add feature")
+    assert result["tasks"][0]["pr_url"] == "https://github.com/owner/repo/pull/1"
+
+
+@pytest.mark.asyncio
+async def test_run_feature_reviewer_exception_proceeds_to_gate(
+    mock_pm, mock_dev, mock_qa, mock_task_store, mock_gate
+):
+    """If code_reviewer.review() raises, engine proceeds to approval gate (non-fatal)."""
+    reviewer = MagicMock()
+    reviewer.review = AsyncMock(side_effect=RuntimeError("LLM timeout"))
+
+    engine = WorkflowEngine(
+        pm=mock_pm, dev=mock_dev, qa=mock_qa,
+        code_reviewer=reviewer,
+        task_store=mock_task_store,
+        approval_gate=mock_gate,
+    )
+    result = await engine.run_feature("Add feature")
+    # Should not raise; gate should still be called
+    mock_gate.request.assert_called_once()
+    assert result["tasks"][0]["success"] is True
+
+
+# --- Orchestrator review command tests ---
+
+def make_clean_review(pr_number=42):
+    return ReviewResult(
+        pr_number=pr_number, critical=[], important=[],
+        suggestions=[], positives=["Clean"], summary="All good.",
+        github_comment_posted=True,
+    )
+
+
+@pytest.fixture
+def orchestrator_with_reviewer():
+    engine = MagicMock()
+    engine.run_feature = AsyncMock(return_value={"session_id": "abc", "tasks": []})
+    engine.run_single_task = AsyncMock(return_value={
+        "task_id": "TASK-001", "success": True,
+        "pr_url": "https://github.com/owner/repo/pull/1",
+    })
+    engine._noop_progress = AsyncMock()
+
+    task_store = MagicMock()
+    task_store.get = AsyncMock(return_value=make_task())
+    task_store.update = AsyncMock()
+    task_store.list_tasks = AsyncMock(return_value=[make_task(status="open")])
+
+    job_queue = MagicMock()
+    job_queue.enqueue = AsyncMock()
+    job_queue.stop = AsyncMock()
+    job_queue.resume = AsyncMock()
+    job_queue.active_count = 0
+    job_queue.queued_count = 0
+    job_queue.is_stopped = False
+
+    cost_tracker = MagicMock()
+    cost_tracker.daily_total = AsyncMock(return_value=0.0)
+
+    code_reviewer = MagicMock()
+    code_reviewer.review = AsyncMock(return_value=make_clean_review())
+
+    gate = MagicMock()
+    gate.resolve_by_pr = MagicMock(return_value=True)
+
+    return Orchestrator(
+        engine=engine,
+        task_store=task_store,
+        job_queue=job_queue,
+        cost_tracker=cost_tracker,
+        code_reviewer=code_reviewer,
+        approval_gate=gate,
+    )
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_review_enqueues_job(orchestrator_with_reviewer):
+    result = await orchestrator_with_reviewer.handle("review 42", "user1")
+    assert "Queued" in result
+    assert "42" in result
+    orchestrator_with_reviewer.job_queue.enqueue.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_review_missing_number(orchestrator_with_reviewer):
+    result = await orchestrator_with_reviewer.handle("review", "user1")
+    assert "Usage" in result
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_review_invalid_number(orchestrator_with_reviewer):
+    result = await orchestrator_with_reviewer.handle("review abc", "user1")
+    assert "valid integer" in result.lower() or "Usage" in result
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_review_override_resolves_gate(orchestrator_with_reviewer):
+    result = await orchestrator_with_reviewer.handle("review override 42", "user1")
+    assert "override" in result.lower() or "approved" in result.lower()
+    orchestrator_with_reviewer.approval_gate.resolve_by_pr.assert_called_once_with(42, True)
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_review_override_not_found(orchestrator_with_reviewer):
+    orchestrator_with_reviewer.approval_gate.resolve_by_pr = MagicMock(return_value=False)
+    result = await orchestrator_with_reviewer.handle("review override 999", "user1")
+    assert "no pending" in result.lower() or "not found" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_usage_includes_review():
+    """usage string mentions the review command."""
+    result = Orchestrator._usage()
+    assert "review" in result

@@ -154,6 +154,67 @@ class GitTool(Tool):
         changed.update(wt_repo.untracked_files)
         return sorted(changed)
 
+    async def get_pr_diff(self, pr_number: int) -> str:
+        """Fetch unified diff for a GitHub PR. Returns raw diff string."""
+        cmd = ["gh", "pr", "diff", str(pr_number)]
+        if self.github_repo:
+            cmd.extend(["--repo", self.github_repo])
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+
+        if proc.returncode != 0:
+            error = stderr.decode().strip()
+            raise RuntimeError(f"gh pr diff failed: {error}")
+
+        return stdout.decode()
+
+    async def get_pr_state(self, pr_number: int) -> str:
+        """Return PR state: 'OPEN', 'MERGED', or 'CLOSED'."""
+        cmd = [
+            "gh", "pr", "view", str(pr_number),
+            "--json", "state", "--jq", ".state",
+        ]
+        if self.github_repo:
+            cmd.extend(["--repo", self.github_repo])
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+
+        if proc.returncode != 0:
+            error = stderr.decode().strip()
+            raise RuntimeError(f"gh pr view failed: {error}")
+
+        return stdout.decode().strip()
+
+    async def post_pr_review(self, pr_number: int, body: str) -> None:
+        """Post a review comment on a GitHub PR."""
+        cmd = [
+            "gh", "pr", "review", str(pr_number),
+            "--comment", "--body", body,
+        ]
+        if self.github_repo:
+            cmd.extend(["--repo", self.github_repo])
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+
+        if proc.returncode != 0:
+            error = stderr.decode().strip()
+            raise RuntimeError(f"gh pr review failed: {error}")
+
     async def run(self, input: str, **kwargs) -> ToolResult:
         """Generic Tool interface — not used directly; use specific methods."""
         return ToolResult(

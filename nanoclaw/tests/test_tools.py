@@ -320,3 +320,110 @@ async def test_claude_code_subprocess_failure(worktree_with_python):
 
     assert not result.success
     assert "exited with code 1" in result.error
+
+
+# --- GitTool PR methods ---
+
+@pytest.mark.asyncio
+async def test_git_tool_get_pr_diff_success():
+    """get_pr_diff returns stdout from gh pr diff."""
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"diff --git a/f.py b/f.py\n+new line", b""))
+        mock_exec.return_value = proc
+
+        git_tool = GitTool.__new__(GitTool)
+        git_tool.github_repo = "owner/repo"
+        result = await git_tool.get_pr_diff(42)
+
+    assert result == "diff --git a/f.py b/f.py\n+new line"
+    call_args = mock_exec.call_args[0]
+    assert "gh" in call_args
+    assert "pr" in call_args
+    assert "diff" in call_args
+    assert "42" in call_args
+
+
+@pytest.mark.asyncio
+async def test_git_tool_get_pr_diff_failure():
+    """get_pr_diff raises RuntimeError on non-zero exit."""
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        proc = AsyncMock()
+        proc.returncode = 1
+        proc.communicate = AsyncMock(return_value=(b"", b"not found"))
+        mock_exec.return_value = proc
+
+        git_tool = GitTool.__new__(GitTool)
+        git_tool.github_repo = "owner/repo"
+
+        with pytest.raises(RuntimeError, match="gh pr diff failed"):
+            await git_tool.get_pr_diff(99)
+
+
+@pytest.mark.asyncio
+async def test_git_tool_get_pr_state_merged():
+    """get_pr_state returns MERGED when gh reports it."""
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"MERGED\n", b""))
+        mock_exec.return_value = proc
+
+        git_tool = GitTool.__new__(GitTool)
+        git_tool.github_repo = "owner/repo"
+        state = await git_tool.get_pr_state(42)
+
+    assert state == "MERGED"
+
+
+@pytest.mark.asyncio
+async def test_git_tool_get_pr_state_open():
+    """get_pr_state returns OPEN for an open PR."""
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"OPEN\n", b""))
+        mock_exec.return_value = proc
+
+        git_tool = GitTool.__new__(GitTool)
+        git_tool.github_repo = "owner/repo"
+        state = await git_tool.get_pr_state(42)
+
+    assert state == "OPEN"
+
+
+@pytest.mark.asyncio
+async def test_git_tool_post_pr_review_success():
+    """post_pr_review calls gh pr review with --comment."""
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        proc = AsyncMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_exec.return_value = proc
+
+        git_tool = GitTool.__new__(GitTool)
+        git_tool.github_repo = "owner/repo"
+        await git_tool.post_pr_review(42, "## Review\nLooks good!")
+
+    call_args = mock_exec.call_args[0]
+    assert "gh" in call_args
+    assert "pr" in call_args
+    assert "review" in call_args
+    assert "--comment" in call_args
+
+
+@pytest.mark.asyncio
+async def test_git_tool_post_pr_review_failure():
+    """post_pr_review raises RuntimeError on non-zero exit."""
+    with patch("asyncio.create_subprocess_exec") as mock_exec:
+        proc = AsyncMock()
+        proc.returncode = 1
+        proc.communicate = AsyncMock(return_value=(b"", b"auth error"))
+        mock_exec.return_value = proc
+
+        git_tool = GitTool.__new__(GitTool)
+        git_tool.github_repo = "owner/repo"
+
+        with pytest.raises(RuntimeError, match="gh pr review failed"):
+            await git_tool.post_pr_review(42, "body")
