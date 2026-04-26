@@ -312,3 +312,98 @@ async def test_research_saves_to_memory():
     ))
     await agent.research("document auth architecture", "Auth Architecture", "s1")
     agent.memory.save_message.assert_called_once()
+
+
+# --- process() document path ---
+
+@pytest.mark.asyncio
+async def test_process_document_calls_research_and_populates_content():
+    doc_json = json.dumps({
+        "action": "document",
+        "command": None,
+        "response": None,
+        "question": None,
+        "intent": "research",
+        "confidence": 0.9,
+        "reasoning": "brief requested",
+        "doc_title": "OAuth 2.0 Options — Technical Brief",
+        "doc_filename": "oauth-2-options.md",
+        "save_to_repo": True,
+    })
+    agent = make_cto_agent(doc_json)
+    markdown_doc = "# OAuth 2.0 Options\n\n## Summary\nThree flows..."
+
+    agent.router.route = AsyncMock(side_effect=[
+        LLMResponse(content=doc_json, model="claude-haiku-4-5-20251001",
+                    provider="anthropic", tokens_in=50, tokens_out=30, cost_usd=0.0001),
+        LLMResponse(content=markdown_doc, model="claude-sonnet-4-6",
+                    provider="anthropic", tokens_in=100, tokens_out=200, cost_usd=0.001),
+    ])
+
+    decision = await agent.process("research OAuth options for PMO", session_id="s1")
+
+    assert decision.action == "document"
+    assert decision.document_content == markdown_doc
+    assert decision.doc_title == "OAuth 2.0 Options — Technical Brief"
+    assert decision.save_to_repo is True
+
+
+@pytest.mark.asyncio
+async def test_process_document_research_failure_returns_clarify():
+    doc_json = json.dumps({
+        "action": "document",
+        "command": None,
+        "response": None,
+        "question": None,
+        "intent": "research",
+        "confidence": 0.9,
+        "reasoning": "brief requested",
+        "doc_title": "OAuth 2.0 Options",
+        "doc_filename": "oauth.md",
+        "save_to_repo": False,
+    })
+    agent = make_cto_agent(doc_json)
+
+    classify_response = LLMResponse(
+        content=doc_json, model="claude-haiku-4-5-20251001",
+        provider="anthropic", tokens_in=50, tokens_out=30, cost_usd=0.0001,
+    )
+    agent.router.route = AsyncMock(side_effect=[
+        classify_response,
+        Exception("Sonnet unavailable"),
+    ])
+
+    decision = await agent.process("document auth module", session_id="s1")
+
+    assert decision.action == "clarify"
+    assert "couldn't generate" in decision.question.lower()
+
+
+@pytest.mark.asyncio
+async def test_process_document_save_to_repo_false():
+    doc_json = json.dumps({
+        "action": "document",
+        "command": None,
+        "response": None,
+        "question": None,
+        "intent": "research",
+        "confidence": 0.85,
+        "reasoning": "architecture doc",
+        "doc_title": "Auth Module Architecture",
+        "doc_filename": "auth-architecture.md",
+        "save_to_repo": False,
+    })
+    agent = make_cto_agent(doc_json)
+    agent.router.route = AsyncMock(side_effect=[
+        LLMResponse(content=doc_json, model="claude-haiku-4-5-20251001",
+                    provider="anthropic", tokens_in=50, tokens_out=30, cost_usd=0.0001),
+        LLMResponse(content="# Auth Architecture\n\n## Summary\n...",
+                    model="claude-sonnet-4-6", provider="anthropic",
+                    tokens_in=100, tokens_out=200, cost_usd=0.001),
+    ])
+
+    decision = await agent.process("document auth module architecture", session_id="s1")
+
+    assert decision.action == "document"
+    assert decision.save_to_repo is False
+    assert decision.document_content is not None

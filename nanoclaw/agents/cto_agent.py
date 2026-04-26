@@ -64,7 +64,24 @@ class CTOAgent(BaseAgent):
             return _FALLBACK_DECISION
 
         decision = self._parse_decision(raw)
-        return self._apply_destructive_guard(decision)
+        decision = self._apply_destructive_guard(decision)
+
+        if decision.action == "document":
+            try:
+                content = await self.research(
+                    topic=message,
+                    doc_title=decision.doc_title or "Research Document",
+                    session_id=session_id,
+                )
+                decision = dataclasses.replace(decision, document_content=content)
+            except Exception as e:
+                logger.error("CTOAgent.research() failed: %s", e)
+                return dataclasses.replace(
+                    _FALLBACK_DECISION,
+                    question="I couldn't generate the document — try again?",
+                )
+
+        return decision
 
     async def research(self, topic: str, doc_title: str, session_id: str) -> str:
         """Deep Sonnet LLM pass — generates a structured markdown research document."""
