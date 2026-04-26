@@ -283,6 +283,11 @@ class NanoClawBot:
                 progress_callback=progress_callback,
             )
         elif decision.action == "execute":
+            if not decision.command:
+                logger.warning(
+                    "CTOAgent returned execute with null command; "
+                    "falling back to raw command: %s", command
+                )
             response = await self.orchestrator.handle(
                 command=decision.command or command,
                 user_id=str(message.author.id),
