@@ -246,10 +246,9 @@ class NanoClawBot:
         session_id = None
         decision = None
         try:
-            pre_thread_id = (str(message.channel.id)
-                             if isinstance(message.channel, discord.Thread)
-                             else None)
-            session_id = pre_thread_id or str(uuid.uuid4())
+            session_id = (str(message.channel.id)
+                          if isinstance(message.channel, discord.Thread)
+                          else str(uuid.uuid4()))
             decision = await self.cto.process(command, session_id=session_id)
         except Exception as e:
             logger.error("CTOAgent.process failed, falling back to orchestrator: %s", e)
@@ -265,6 +264,8 @@ class NanoClawBot:
             )
 
         target_channel = thread or message.channel
+        # Update session_id to thread id for orchestrator continuity;
+        # CTO classification already used the pre-thread session_id above.
         session_id = str(thread.id) if thread else session_id
 
         async def progress_callback(msg: str):
@@ -278,14 +279,14 @@ class NanoClawBot:
             response = await self.orchestrator.handle(
                 command=command,
                 user_id=str(message.author.id),
-                thread_id=str(target_channel.id) if thread else None,
+                thread_id=str(thread.id) if thread else None,
                 progress_callback=progress_callback,
             )
         elif decision.action == "execute":
             response = await self.orchestrator.handle(
-                command=decision.command,
+                command=decision.command or command,
                 user_id=str(message.author.id),
-                thread_id=str(target_channel.id) if thread else None,
+                thread_id=str(thread.id) if thread else None,
                 progress_callback=progress_callback,
             )
         elif decision.action == "respond":
@@ -296,7 +297,7 @@ class NanoClawBot:
             response = await self.orchestrator.handle(
                 command=command,
                 user_id=str(message.author.id),
-                thread_id=str(target_channel.id) if thread else None,
+                thread_id=str(thread.id) if thread else None,
                 progress_callback=progress_callback,
             )
 

@@ -104,10 +104,12 @@ async def test_handle_message_execute_routes_to_orchestrator():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Task 6")
 async def test_handle_message_respond_posts_directly():
-    pass  # stub — Task 6 fills this in
+    pass
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Task 6")
 async def test_handle_message_cto_failure_falls_back_to_orchestrator(tmp_path):
-    pass  # stub — Task 6 fills this in
+    pass
