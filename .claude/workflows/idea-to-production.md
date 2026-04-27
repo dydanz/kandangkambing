@@ -1,179 +1,121 @@
 # Workflow: Idea to Production
 
-The end-to-end journey from a raw idea to a feature live in production.
+The end-to-end journey for a NanoClaw feature from idea to live Discord bot.
 
 ## Overview
 
 ```
-Idea → Research → PRD → TRD → Implementation → Testing → Deploy → Monitor
-  │        │        │      │         │              │         │         │
-  │   product-  product-  tech-   plan_feature   run_tests  gitops   observability
-  │   research  manager   lead-                            /cicd      -infra
-  │                       architect                                               │
-  └────────────────────────────────────────────────────────────────────────────────
-         ⛔ No code written until TRD is Approved
+Idea → Spec → Implementation Plan → Code (TDD) → PR → Merge → Deploy
+  │       │           │                  │           │      │        │
+brainstorm  design   writing-plans   TDD+tests   review  CI    docker
+            doc                                                compose
+⛔ No code written until spec is approved
 ```
 
-## Phase 1: Discovery (Product)
+## Phase 1: Discovery
 
-**Goal:** Validate the problem is real and worth solving.
+**Goal:** Understand what to build before building it.
 
 **Steps:**
-1. Document the raw idea or user problem
-2. Invoke `/generate-prd` to begin the research and requirements process
-3. `product-research` agent: conduct user and market research
-4. Align on problem statement (no solution yet)
-5. Define success metrics with baselines
+1. Document the idea or user problem in 1-2 sentences
+2. Invoke `superpowers:brainstorming` to explore the problem and options
+3. Identify constraints: Does this require a new agent? New tool? New routing key?
+4. Decide: is this a `respond` flow (inline answer) or an `execute` flow (new orchestrated behavior)?
 
 **Exit criteria:**
-- [ ] Problem statement confirmed by stakeholders
-- [ ] Target user segment defined with evidence
-- [ ] Success metrics have baselines
-- [ ] Decision: build vs buy vs defer
+- [ ] Problem statement clear
+- [ ] Approach decided (new agent vs extend existing vs new tool)
+- [ ] Out-of-scope explicitly noted
 
 ---
 
-## Phase 2: Requirements (PRD)
+## Phase 2: Spec
 
-**Goal:** Define exactly what to build, with clear acceptance criteria.
+**Goal:** Write a precise design document before touching code.
 
 **Steps:**
-1. `product-manager` agent: write PRD using research findings
-2. Review all user stories and acceptance criteria
-3. Resolve all open questions (no PRD with unknowns)
-4. Get stakeholder sign-off on scope (P0 vs P1 vs P2)
-
-**Artifacts:**
-- `.claude/thoughts/prd/YYYY-MM-DD-[feature].md`
+1. Use `superpowers:brainstorming` to reach design consensus
+2. Write design spec to `docs/specs/YYYY-MM-DD-[feature]-design.md`
+3. Spec must include: what changes, what does NOT change, new data structures, error handling, testing plan
+4. Get approval (review the spec file directly) before proceeding
 
 **Exit criteria:**
-- [ ] PRD status: Approved
-- [ ] All P0 requirements defined with acceptance criteria
-- [ ] Out-of-scope section explicit
-- [ ] Dependencies identified with owners and ETAs
+- [ ] Spec saved and committed to `docs/specs/`
+- [ ] All open questions resolved (no TBDs in the spec)
+- [ ] "What does NOT change" section explicit (prevents scope creep)
 
 ---
 
-## Phase 3: TRD — Technical Requirements Document
+## Phase 3: Implementation Plan
 
-**Goal:** Produce a single approved TRD before any code is written. The TRD is the authoritative contract between product, engineering, and ops.
+**Goal:** Break the spec into bite-sized, testable tasks.
 
 **Steps:**
-1. Invoke `/design-architecture` with the approved PRD
-2. `tech-lead-architect` agent: author TRD using `templates/trd-template.md`
-3. Fill every section — leave no section blank; mark N/A only if explicitly not applicable
-4. Review API contract with frontend and backend leads
-5. Review data model with DBA or backend lead
-6. Confirm all NFRs (performance, reliability, security) have measurable targets
-7. Resolve all open questions — no TRD may be approved with open questions remaining
-8. Get tech lead sign-off → set TRD status to **Approved**
+1. Invoke `superpowers:writing-plans` with the approved spec
+2. Save plan to `docs/superpowers/plans/YYYY-MM-DD-[feature].md`
+3. Each task must include: files to change, failing test to write, implementation code, passing test verification, commit command
 
-**Artifacts:**
-- `.claude/thoughts/trd/YYYY-MM-DD-[feature]-trd.md` (from `templates/trd-template.md`)
-- ADRs for key technical decisions (use `templates/architecture-decision-record.md`)
+**Key agents referenced in plans:**
+- `python-architect` — agent/module structure decisions
+- `concurrency` — async patterns, asyncio.gather
+- `fault-tolerance` — LLM fallback, timeout handling
+- `observability` — logging and cost tracking
+- `testing-strategy` — what to test, mock patterns
 
-**Exit criteria — hard gate, no implementation starts until all boxes are checked:**
-- [ ] TRD status: **Approved**
-- [ ] All 11 sections completed (no blanks except explicit N/A)
-- [ ] API contract reviewed by both frontend and backend leads
-- [ ] Data model and migration strategy defined (or N/A with reason)
-- [ ] All NFR targets are measurable (not "fast" — use numbers)
-- [ ] Technical risks documented with mitigations
-- [ ] Open Questions section is empty (all resolved)
-- [ ] Success metrics defined with baselines and targets
-
-> **Rule:** If implementation uncovers a gap in the TRD, stop and update the TRD first. Get re-approval before continuing.
+**Exit criteria:**
+- [ ] Plan saved and committed
+- [ ] No placeholder tasks ("TBD", "implement later")
+- [ ] All routing keys identified and noted
 
 ---
 
 ## Phase 4: Implementation
 
-**Goal:** Build the feature according to the TDD.
+**Goal:** Build exactly what the spec says, test-first.
 
 **Steps:**
-1. Invoke `/plan-feature` with the approved TRD
-2. Create implementation tasks from the plan
-3. Backend: implement following clean architecture
-   - Domain layer first (no external deps)
-   - Infrastructure adapters second
-   - HTTP handlers last
-4. Frontend: implement following feature-based structure
-   - API hooks first
-   - State management second
-   - UI components last
-5. Write tests alongside code (TDD preferred)
+1. Create git worktree: `superpowers:using-git-worktrees`
+2. Execute tasks: `superpowers:subagent-driven-development`
+3. Each task: write failing test → implement → pass test → commit
+4. After all tasks: run full suite `python -m pytest tests/ -v`
 
-**Key agents:**
-- `go-architect` — structural decisions
-- `concurrency` — goroutine patterns
-- `fault-tolerance` — retry/circuit breaker
-- `observability` — logging/metrics/tracing
-- `frontend-architect` — component structure
-- `state-management` — data flow
+**Key constraint:** Every LLM call must go through `LLMRouter`. Never call provider SDKs directly.
 
 **Exit criteria:**
-- [ ] All P0 features implemented
-- [ ] Unit tests written and passing
-- [ ] Integration tests written and passing
+- [ ] All tasks completed
+- [ ] `python -m pytest tests/ -v` — all passing
+- [ ] Coverage gate holds: `pytest --cov-fail-under=70`
 - [ ] Code reviewed (`/review-code`)
-- [ ] golangci-lint passes
 
 ---
 
-## Phase 5: Testing
-
-**Goal:** Verify the implementation matches the PRD acceptance criteria.
+## Phase 5: PR and Merge
 
 **Steps:**
-1. Invoke `/run-tests` — all test layers
-2. Create test plan using `templates/test-plan-template.md`
-3. Run E2E tests against staging environment
-4. Performance test if SLO is involved
-5. Manual QA against acceptance criteria in PRD
-6. Fix any failures before proceeding
-
-**Exit criteria:**
-- [ ] All automated tests pass in CI
-- [ ] Coverage meets targets (70% overall, 85% domain)
-- [ ] All P0 acceptance criteria verified manually in staging
-- [ ] Performance SLOs met in staging load test
+1. Use `superpowers:finishing-a-development-branch` → choose Option 2 (Push + PR)
+2. PR goes to main branch
+3. CI must pass (lint + tests + build)
+4. Merge after review
 
 ---
 
-## Phase 6: Deployment
-
-**Goal:** Ship to production safely.
+## Phase 6: Deploy
 
 **Steps:**
-1. Merge to main → CI runs → builds and pushes image
-2. GitOps automation updates dev environment
-3. Verify dev deployment is healthy
-4. Create PR to staging GitOps overlay
-5. Verify staging deployment is healthy
-6. Create PR to prod GitOps overlay (requires approval)
-7. Deploy to production during deployment window
-8. Monitor for 30 minutes post-deployment
-
-**Exit criteria:**
-- [ ] Dev deployment healthy for 24 hours
-- [ ] Staging deployment healthy, E2E tests pass
-- [ ] Production deployment healthy for 30 minutes
-- [ ] No spike in error rate or latency
-- [ ] Rollback plan confirmed (revert GitOps commit)
+1. After CI passes on main:
+   ```bash
+   docker compose pull && docker compose up -d
+   ```
+2. Verify: `@CTO status` responds in Discord
+3. Check `docker compose logs nanoclaw` — no new ERRORs
+4. Test the new feature manually in Discord
 
 ---
 
-## Phase 7: Monitor & Learn
+## Rules
 
-**Goal:** Confirm the feature achieves its success metrics.
-
-**Steps:**
-1. Monitor error rates and latency for 48 hours
-2. Track leading indicators (adoption, activation) at Day 7
-3. Track lagging indicators (retention, NPS) at Day 30
-4. Document learnings in `.claude/learnings.md`
-
-**Exit criteria:**
-- [ ] Primary metric on track to hit target
-- [ ] No regression in counter-metrics
-- [ ] Learnings documented for future features
+- **No code without an approved spec** — spec first, always
+- **No skipping tests** — CI must pass, coverage gate must hold
+- **No direct LLM SDK calls** — always use `LLMRouter.route()`
+- **No pushing to main/master** — PRs only, CI required
+- **No secrets in git** — `.env` only, verified in `.gitignore`

@@ -1,128 +1,100 @@
 # /setup-infra
 
-Guides infrastructure setup — Terraform module design, Kubernetes manifests, CI/CD pipeline configuration, and observability stack deployment. Orchestrates infrastructure domain agents.
+Sets up NanoClaw deployment infrastructure — Docker, docker-compose, `.env`, and GitHub Actions CI.
 
 ## When Invoked
 
-If no target is specified:
-
 ```
-What infrastructure would you like to set up or review?
+What infrastructure would you like to set up?
 
-1. AWS + Terraform (new environment or module)
-2. Kubernetes cluster setup (EKS, node groups, namespaces)
-3. GitOps configuration (Flux or ArgoCD)
-4. CI/CD pipeline (GitHub Actions)
-5. Observability stack (Prometheus, Grafana, Loki, Tempo)
-6. Security configuration (IAM, secrets, network policies)
-7. Full stack setup (1-6 in order)
+1. Docker + docker-compose (new server deployment)
+2. GitHub Actions CI (lint + test + build pipeline)
+3. Environment configuration (.env + settings.json review)
+4. Bot token setup (Discord developer portal guidance)
 
-Specify what you need, and I'll coordinate the relevant infrastructure agents.
+Specify what you need.
 ```
 
-## Infrastructure Setup Process
-
-### Environment Context Gathering
-
-Before proceeding, collect:
-```
-To design your infrastructure, I need:
-
-1. Cloud provider: AWS (primary focus)
-2. AWS regions: [e.g., ap-southeast-1]
-3. Environments needed: [dev / staging / prod]
-4. AWS Organization: Existing or new?
-5. Existing VPC/networking: Or greenfield?
-6. Team size (affects IAM complexity)
-7. Compliance requirements: [SOC2, HIPAA, PCI-DSS, none]
-8. Estimated initial load: [req/s, data volume]
-```
-
-### Phase 1: Foundation (Networking + IAM)
-
-Invoke `terraform-architect` agent:
-- VPC design with CIDR allocation
-- Subnet strategy (public / private-app / private-data)
-- NAT Gateway configuration
-- AWS accounts and IAM role structure
-
-Invoke `security` agent:
-- IAM roles with least privilege
-- Permission boundaries
-- Service control policies (for multi-account)
-
-Output: Terraform module structure for `vpc/` and `iam/`
-
-### Phase 2: Compute (EKS Cluster)
-
-Invoke `kubernetes-architect` agent:
-- Node group design
-- Cluster version and addons
-- Namespace strategy
-
-Invoke `networking` agent:
-- Ingress controller setup
-- Network policies
-- cert-manager configuration
-
-Output: EKS Terraform module + baseline K8s manifests
-
-### Phase 3: GitOps Setup
-
-Invoke `gitops` agent:
-- Flux or ArgoCD bootstrap
-- GitOps repository structure
-- Environment promotion strategy
-- Image update automation
-
-Output: `.flux/` or Argo Application manifests
-
-### Phase 4: CI/CD Pipeline
-
-Invoke `cicd` agent:
-- GitHub Actions workflow templates
-- Build, test, security scan stages
-- Docker build + ECR push
-- GitOps update step
-
-Output: `.github/workflows/` templates
-
-### Phase 5: Observability Stack
-
-Invoke `observability-infra` agent:
-- kube-prometheus-stack configuration
-- Loki + Promtail deployment
-- Tempo configuration
-- Grafana dashboards as code
-- Alertmanager routing (Slack + PagerDuty)
-
-Output: Helm values files + Kubernetes manifests
-
-### Review and Validation
-
-After generating infrastructure code:
+## Option 1: Docker Deployment
 
 ```
-Infrastructure setup complete. Before applying:
+To deploy NanoClaw on a server:
 
-✅ Review checklist:
-  - [ ] Terraform: `terraform validate` passes in each environment
-  - [ ] Kubernetes: `kubectl --dry-run=client -f ./` passes
-  - [ ] Secrets: No sensitive values in any committed file
-  - [ ] IAM: Reviewed for least-privilege
-  - [ ] Costs: Estimated monthly cost reviewed
+Prerequisites on the server:
+  - Docker 24+
+  - docker-compose v2
+  - git (to clone the repo)
+  - gh CLI (authenticated, for PR creation)
+  - claude CLI (authenticated, on PATH)
 
-⚠️ Destructive operations require your explicit approval:
-  - `terraform apply` — run manually after reviewing the plan
-  - GitOps bootstrap — reconciliation begins immediately
-  - ECR repository creation — cannot be renamed after creation
+Steps:
+  1. Clone the repo: git clone <repo> /opt/nanoclaw
+  2. cd /opt/nanoclaw/nanoclaw
+  3. cp .env.example .env && nano .env   # fill in all tokens
+  4. Edit config/settings.docker.json:
+     - project_path: /workspace/project  (mount target project here)
+     - worktree_base: /workspace/worktrees
+     - discord.allowed_user_ids: [your Discord user ID]
+     - discord.command_channel_id, log_channel_id, commits_channel_id
+  5. docker compose up -d
+  6. docker compose logs -f nanoclaw   # verify startup
 ```
 
-## Important Guidelines
+Volumes required in docker-compose.yml:
+```yaml
+volumes:
+  - /path/to/target-project:/workspace/project
+  - /path/to/worktrees:/workspace/worktrees
+  - ./memory:/app/memory
+```
 
-- Never run `terraform apply` automatically — always show plan first, wait for approval
-- Never run `kubectl apply` directly — use GitOps for all cluster state changes
-- All secrets must go through External Secrets Operator — never in git
-- IAM policies must be reviewed for least-privilege before applying
-- Infrastructure changes in production require change management process
-- Estimate monthly costs before applying (use `infracost` or AWS Pricing Calculator)
+## Option 2: GitHub Actions CI
+
+See `.claude/agents/infrastructure/cicd.md` for the full CI workflow template.
+
+Minimum required jobs: `lint`, `test`, `build`.
+
+Secrets to configure in GitHub repository settings:
+- `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_KEY` — for SSH deploy (optional)
+
+## Option 3: Environment Configuration
+
+```
+Required .env entries:
+  DISCORD_BOT_TOKEN      — legacy fallback
+  DISCORD_CTO_TOKEN      — CTO bot (listener)
+  DISCORD_PMO_TOKEN      — PM bot
+  DISCORD_SED_TOKEN      — Dev/SED bot
+  DISCORD_QAD_TOKEN      — QA bot
+  ANTHROPIC_API_KEY      — primary LLM
+  OPENAI_API_KEY         — fallback LLM (optional)
+  GOOGLE_API_KEY         — fallback LLM (optional)
+  GITHUB_TOKEN           — PR creation
+
+Check: none of these should appear in settings.json or any committed file.
+```
+
+## Option 4: Bot Token Setup
+
+```
+For each bot (CTO, PMO, SED, QAD):
+  1. Go to https://discord.com/developers/applications
+  2. Create New Application → name it (e.g., "NanoClaw CTO")
+  3. Bot tab → Add Bot → copy Token → paste into .env
+  4. OAuth2 → URL Generator → scopes: bot, applications.commands
+     → permissions: Send Messages, Read Message History, Create Threads
+  5. Open the generated URL in browser → invite bot to your server
+
+Test all tokens:
+  pytest tests/test_discord_tokens.py -v -s
+```
+
+## Pre-Deploy Checklist
+
+See `agents/backend/production-readiness.md` for the full checklist.
+
+## Guidelines
+
+- Never commit `.env` — verify it's in `.gitignore` before proceeding
+- No Kubernetes, Terraform, or cloud infrastructure needed
+- Single docker-compose deployment is the intended production setup

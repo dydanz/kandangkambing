@@ -1,6 +1,6 @@
 # /run-tests
 
-Runs the appropriate test suite, analyzes failures, and provides actionable fix guidance. Orchestrates testing agents based on what tests are needed.
+Runs the NanoClaw test suite, analyzes failures, and provides actionable fix guidance.
 
 ## When Invoked
 
@@ -9,139 +9,94 @@ If no scope is specified:
 ```
 Which tests would you like to run?
 
-1. All tests (unit + integration)
-2. Unit tests only (fast, no external dependencies)
-3. Integration tests (requires DB/services)
-4. E2E tests (full stack, slowest)
-5. Specific package/feature: [provide path or name]
-6. Failed tests from last run
-7. Benchmark tests
+1. All tests (full suite)
+2. Specific module or file: [provide name]
+3. Failed tests only (rerun last failures)
+4. With coverage report
+5. From Docker (docker compose run)
 
-Or describe what you want to test and I'll select the right command.
+Or describe what you want to test.
 ```
 
-## Test Execution Process
+## Test Execution
 
-### Step 1: Determine Test Type
-
-Based on the request:
-
-**Unit tests:**
+**Full suite:**
 ```bash
-# Go
-go test -race -short -coverprofile=coverage.out ./...
-
-# Frontend
-pnpm test --run
+cd nanoclaw
+python -m pytest tests/ -v
 ```
 
-**Integration tests:**
+**With coverage:**
 ```bash
-# Go (requires TEST_DATABASE_URL set)
-go test -race -run Integration ./...
-
-# Or with docker-compose for dependencies
-docker compose -f docker-compose.test.yaml up -d
-go test -race ./...
-docker compose -f docker-compose.test.yaml down
+python -m pytest tests/ -v --cov=. --cov-report=term-missing
 ```
 
-**E2E tests:**
+**Specific file:**
 ```bash
-npx playwright test
+python -m pytest tests/test_cto_agent.py -v
 ```
 
-**Benchmarks:**
+**Specific test:**
 ```bash
-go test -bench=. -benchmem -benchtime=10s ./...
+python -m pytest tests/test_cto_agent.py::test_process_returns_respond_action -v -s
 ```
 
-### Step 2: Run and Monitor
+**From Docker:**
+```bash
+docker compose run --rm nanoclaw pytest tests/ -v
+```
 
-Execute the tests and capture:
-- Total: passed / failed / skipped count
-- Duration
-- Coverage percentage
-- Any flaky patterns (same test failing intermittently)
+**Coverage gate check (CI-equivalent):**
+```bash
+python -m pytest tests/ --cov=. --cov-fail-under=70 -q
+```
 
-### Step 3: Failure Analysis
+## Failure Analysis
 
-For any test failures, analyze and categorize:
+For any test failure, analyze and report:
 
 ```markdown
 ## Test Run Summary
 Date: YYYY-MM-DD HH:MM
-Command: `go test -race ./...`
-Result: ❌ FAILED
+Command: `python -m pytest tests/ -v`
+Result: ❌ FAILED (N failures)
 
-### Failed Tests (3)
+### Failed Tests
 
-#### 1. TestOrderService_CreateOrder_WhenDBDown
-File: internal/domain/order/service_test.go:45
+#### 1. tests/test_cto_agent.py::test_parse_decision_document_action
 Error:
-  expected error "connection refused", got nil
+  AssertionError: expected doc_title == "OAuth Brief", got None
 
-Root cause: The test expects DB failure, but the mock is returning success.
-The mock setup at line 38 returns nil error unconditionally.
-
-Fix:
-  Line 38: Change `mockRepo.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil, nil)`
-  To: `mockRepo.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil, errors.New("connection refused"))`
-
-#### 2. TestUserHandler_POST_ValidatesEmail
-...
+Root cause: _parse_decision() not populating doc_title when action=="document"
+Fix: nanoclaw/agents/cto_agent.py:123 — add doc_title extraction from JSON
 
 ### Coverage Report
-Package                           Coverage  Change
-internal/domain/order             82.3%     +2.1%
-internal/infrastructure/http      71.0%     -0.5% ⚠️
-internal/domain/user              68.2%     No change
-
-⚠️ Coverage dropped in internal/infrastructure/http — new code added without tests
+Module               Coverage  Concern
+agents/cto_agent     82%
+agents/base          71%
+safety/budget_guard  68%       ⚠️ below 70% target
 ```
 
-### Step 4: Guidance
+## Common Failure Patterns
 
-For each failure, provide:
-1. Root cause explanation (not just what failed, but why)
-2. Specific fix with file:line reference
-3. Whether it's a test bug or a code bug
-
-For coverage drops:
-- Identify the new uncovered code
-- Suggest which test cases to add
-- Provide test case template
-
-### Quick Commands Reference
-
-```makefile
-# Add to project Makefile
-
-test:          ## Run all tests
-	go test -race ./...
-
-test-unit:     ## Run unit tests (fast, no deps)
-	go test -race -short ./...
-
-test-cover:    ## Run tests with coverage report
-	go test -race -coverprofile=coverage.out ./...
-	go tool cover -func=coverage.out
-
-test-watch:    ## Watch mode (requires gotestsum)
-	gotestsum --watch --format=testname -- -short ./...
-
-test-race:     ## Run with race detector (CI-grade)
-	go test -race -count=3 ./...
-
-bench:         ## Run benchmarks
-	go test -bench=. -benchmem ./...
+**`AttributeError: 'MagicMock' object has no attribute 'route'`**
+→ Mock setup incorrect. Use `AsyncMock` for coroutines:
+```python
+mock_router.route = AsyncMock(return_value=mock_response(...))
 ```
 
-## Important Guidelines
+**`KeyError: 'research'` in settings loading**
+→ New routing key in `settings.json` not added to `tests/conftest.py:SAMPLE_SETTINGS`
 
-- Always run with `-race` flag — race conditions are silent without it
-- Integration tests require the test environment to be running — check docker status first
-- Coverage below 70% overall or below 85% for domain packages is a concern — report it
-- Never modify tests to make them pass by removing assertions — fix the code or test logic
-- If tests are flaky (pass sometimes, fail sometimes), flag it — don't just re-run until it passes
-- Benchmark results need comparison against a baseline to be meaningful
+**`RuntimeError: no running event loop`**
+→ Missing `@pytest.mark.asyncio` or `asyncio_mode = auto` not set in `pytest.ini`
+
+**`sqlite3.OperationalError: database is locked`**
+→ Two tests sharing a real SQLite file — use `:memory:` or `tmp_path` fixture
+
+## Guidelines
+
+- `-s` flag shows `print()` output and logging — useful for debugging
+- Never modify test assertions to make tests pass — fix the code or test logic
+- If a test is flaky (sometimes passes, sometimes fails), flag it with a `pytest.mark.skip` and a TODO
+- Coverage below 70% overall is a concern — report which module is causing it

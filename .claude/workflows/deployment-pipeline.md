@@ -1,6 +1,6 @@
 # Workflow: Deployment Pipeline
 
-The end-to-end deployment process from code merge to production, using GitOps as the delivery mechanism.
+NanoClaw deployment process from code merge to production via docker-compose.
 
 ## Pipeline Overview
 
@@ -8,201 +8,91 @@ The end-to-end deployment process from code merge to production, using GitOps as
 Code Merge to Main
     │
     ▼
-[CI Pipeline — GitHub Actions]
-    ├── Lint (Go + TS)
-    ├── Unit Tests
-    ├── Integration Tests
-    ├── Security Scan (Trivy, truffleHog)
-    ├── Build Docker Image
-    ├── Scan Image (Trivy)
-    └── Push to ECR
-         │
+[CI — GitHub Actions]
+    ├── ruff lint
+    ├── pytest (coverage gate 70%)
+    ├── secret scan (trufflehog)
+    └── Docker build + push to GHCR
+         │ (manual trigger)
          ▼
-[Auto: Update Dev GitOps]
-    │ Flux reconciles within 5-10min
-    ▼
-[Dev Environment]
-    ├── Health check
-    ├── Smoke test
-    └── Monitor 15min
-         │ (Manually triggered)
-         ▼
-[Staging Promotion PR]
-    ├── Code review required
-    ├── E2E tests in staging
-    └── Stakeholder sign-off
-         │ (Manually triggered with approval)
-         ▼
-[Production Deployment]
-    ├── Deploy during window: weekdays 10am-3pm
-    ├── Monitor 30min
-    └── Rollback if needed
+[Production Server]
+    docker compose pull
+    docker compose up -d
+    docker compose logs -f nanoclaw
 ```
 
-## Stage 1: CI Pipeline (Automated)
+## Stage 1: CI (Automated on every PR/merge)
 
-Triggered on every push to `main`.
+Target: < 5 minutes.
 
-```
-Duration target: < 10 minutes
-```
-
-**Go Backend CI:**
 ```bash
-golangci-lint run ./...          # Lint
-go test -race -short ./...       # Unit tests
-go test -race -run Integration   # Integration tests (with service containers)
-go build -o /dev/null ./...      # Build check
+# Runs automatically via .github/workflows/ci.yml
+# 1. ruff check + ruff format --check
+# 2. pytest tests/ --cov=. --cov-fail-under=70
+# 3. trufflehog secret scan
+# 4. docker build + push to ghcr.io (main branch only)
 ```
 
-**Frontend CI:**
+CI must pass before merging any PR. See `agents/infrastructure/cicd.md` for the full workflow YAML.
+
+## Stage 2: Deploy to Production
+
+After CI passes on main:
+
 ```bash
-pnpm typecheck                   # Type check
-pnpm lint                        # ESLint
-pnpm test:unit --run             # Unit tests
-pnpm build                       # Build check
+# SSH to production server
+ssh user@server
+
+cd /opt/nanoclaw
+git pull
+docker compose pull       # get latest GHCR image
+docker compose up -d      # restart with new image
+docker compose logs -f nanoclaw   # verify startup
 ```
 
-**Security:**
+**Verify the bot is healthy:**
+- Bot comes online in Discord (green status)
+- Send a test command (`@CTO status`) and verify response
+- Check `docker compose logs` for any ERROR-level messages
+
+## Post-Deploy Monitoring (10 minutes)
+
+Watch for:
+- Discord bot status: online
+- No `ERROR` or `CRITICAL` log lines in `docker compose logs`
+- Budget guard and rate limiter responding correctly
+- `@CTO status` command returns expected output
+
+## Rollback
+
 ```bash
-trivy fs . --severity CRITICAL,HIGH --exit-code 1
-trufflehog git --since-commit HEAD~1
+# Option A: Roll back to previous image
+docker compose down
+# Edit docker-compose.yml image tag to previous SHA
+docker compose up -d
+
+# Option B: Roll back git + rebuild
+git revert HEAD
+git push  # triggers CI → new build → redeploy
 ```
 
-**Image Build:**
+## Hotfix Process
+
+For SEV1/SEV2 bugs (bot down, security issue):
+
 ```bash
-docker build --platform linux/amd64 -t $ECR_URI:$TAG .
-trivy image $ECR_URI:$TAG --severity CRITICAL --exit-code 1
-docker push $ECR_URI:$TAG
+git checkout -b hotfix/description main
+# fix + test
+git push origin hotfix/description
+# create PR → fast review → merge → CI → deploy
 ```
 
-## Stage 2: Dev Deployment (Automated)
-
-After CI succeeds on main, the CD step automatically:
-1. Updates the image tag in the dev GitOps overlay
-2. Commits and pushes to the GitOps repository
-3. Flux reconciles within the next sync interval (≤ 5 minutes)
-
-**Verify dev deployment:**
-```bash
-# Check Flux reconciliation status
-flux get kustomization apps -n flux-system
-
-# Check deployment rollout
-kubectl rollout status deployment/api-server -n myapp-dev --timeout=5m
-
-# Smoke test
-curl -f https://api-dev.myapp.io/healthz/ready
-```
-
-**Monitor for 15 minutes:**
-- Error rate in Grafana
-- P99 latency
-- Pod restart count
-
-If any anomaly: investigate before promoting to staging.
-
-## Stage 3: Staging Promotion
-
-**When to promote:**
-- Dev has been stable for 24 hours
-- Feature is complete (all P0 acceptance criteria met in dev)
-- QA sign-off obtained (for customer-facing features)
-
-**Process:**
-```bash
-# GitOps promotion: update staging overlay with same image tag
-# This is done via PR to the GitOps repository
-
-# PR title: chore(deploy/staging): api-server → [TAG]
-# Include: What changed, why, verification steps
-```
-
-After staging deployment:
-1. Run E2E test suite against staging
-2. Manual QA of new features against acceptance criteria
-3. Performance validation (load test if SLO-affecting)
-4. Stakeholder demo and sign-off if required
-
-**Staging sign-off checklist:**
-- [ ] E2E tests pass
-- [ ] Acceptance criteria verified manually
-- [ ] No performance regression (compare Grafana dashboards)
-- [ ] Security scan: no new HIGH/CRITICAL findings
-- [ ] Stakeholder sign-off (for major features)
-
-## Stage 4: Production Deployment
-
-**Deployment windows:**
-- Weekdays only: 10:00 AM – 3:00 PM (local business hours)
-- NO deployments: Fridays, public holidays, peak business periods
-- Emergency hotfixes: any time, with on-call engineer monitoring
-
-**Pre-deployment checklist:**
-- [ ] Staging has been stable for 24 hours
-- [ ] On-call engineer available to monitor and rollback
-- [ ] Rollback plan confirmed: `git revert` + `flux reconcile`
-- [ ] Monitoring dashboards open
-- [ ] Stakeholders notified (for significant features)
-- [ ] Database migrations: reviewed and rollback-safe
-
-**Deploy process:**
-```bash
-# Create PR to prod GitOps overlay
-# Requires: 2 reviewer approvals + tech lead sign-off
-
-# After merge: Flux reconciles within 5-10 minutes
-# Monitor during reconciliation
-```
-
-**Post-deployment monitoring (30 minutes):**
-```
-Watch in Grafana:
-  - HTTP error rate: should not exceed 0.1%
-  - P99 latency: should not increase > 20% from baseline
-  - Pod restart count: should be 0
-  - Active connections: normal range
-  - Database connection pool: not exhausted
-
-Watch in Loki:
-  - ERROR level log count
-  - New error patterns not seen before
-```
-
-## Rollback Procedure
-
-**When to rollback:**
-- Error rate > 1% (10x normal)
-- P99 latency > 2x baseline
-- Core feature broken for users
-- Security issue discovered post-deploy
-
-**Rollback steps:**
-```bash
-# 1. Revert the GitOps commit
-git revert HEAD  # In GitOps repository
-git push
-
-# 2. Flux reconciles automatically — previous version redeploys
-# Duration: ~5-10 minutes
-
-# 3. Verify rollback succeeded
-kubectl rollout status deployment/api-server -n myapp-prod
-curl -f https://api.myapp.io/healthz/ready
-
-# 4. Notify team of rollback and reason
-```
-
-**Database rollback:**
-- If a migration was applied, run the down migration
-- Only possible if migration was designed to be reversible
-- This is why ALL migrations must have down scripts
+No staging environment for NanoClaw — deploy directly to production after CI passes.
 
 ## Deployment Constraints
 
-- NEVER deploy on Fridays (no one to monitor over the weekend)
-- NEVER deploy during peak traffic periods (check Grafana before scheduling)
-- NEVER skip CI — no direct pushes to production image repository
-- NEVER skip the dev → staging → prod promotion sequence for production features
-- Hotfixes can skip staging for SEV1 only, with on-call engineer present
-- All deployments must be GitOps — never `kubectl apply` directly
+- Never push directly to `main` without CI passing
+- Never run `docker compose up` with a broken test suite
+- Never deploy on a whim — verify CI is green first
+- Before deploy: check `.env` is up to date on the server
+- After deploy: verify `@CTO status` responds within 60 seconds

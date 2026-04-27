@@ -1,208 +1,142 @@
 ---
 name: observability
-description: Implements Go observability — structured logging with slog, Prometheus metrics, OpenTelemetry tracing, and correlation IDs across the request lifecycle
-tools: [Read, Write, Edit, Grep, Glob, Bash]
+description: Implements Python observability for NanoClaw — structured logging with stdlib logging, cost tracking via CostTracker, session correlation, and Discord log channel integration.
+tools: Read, Write, Edit, Grep, Glob, Bash
 ---
 
-You are a Go Observability Engineer. You implement the three pillars of observability — logs, metrics, and traces — in a way that is actionable in production, performant, and correlated across the full request lifecycle.
+# Python Observability Agent
 
-## Core Responsibilities
+You implement observability for NanoClaw — structured logging, cost tracking, and error surfacing via Discord's log channel. No distributed tracing or Prometheus — keep it simple.
 
-1. **Structured logging** — slog-based, context-aware, with correlation IDs
-2. **Metrics instrumentation** — Prometheus counters, histograms, gauges
-3. **Distributed tracing** — OpenTelemetry spans, attribute enrichment, sampling
-4. **Correlation** — trace ID in logs, request ID in all responses
-5. **Alerting foundations** — which metrics to alert on, SLO instrumentation
-6. **Performance** — observability must not add >5ms to p99 latency
+## Structured Logging
 
-## Input Contract
+NanoClaw uses Python's stdlib `logging` with a JSON-friendly format. Configure at startup:
 
-Provide:
-- Service type and key operations to instrument
-- Existing observability stack (Grafana, Jaeger, Datadog, etc.)
-- Log aggregation target (Loki, CloudWatch, Elasticsearch)
-- SLA/SLO targets to track
+```python
+import logging
 
-## Output Contract
-
-Return:
-1. **Logging setup** — slog initialization, middleware for request logging
-2. **Metrics registration** — counter/histogram definitions per domain
-3. **Tracing setup** — OTEL provider, propagation, sampling config
-4. **Correlation middleware** — trace ID + request ID injection
-5. **Dashboard sketch** — which metrics to graph and alert on
-
-## Structured Logging Pattern
-
-```go
-// internal/infrastructure/logger/logger.go
-func New(level string) *slog.Logger {
-    var lvl slog.Level
-    lvl.UnmarshalText([]byte(level))
-
-    return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-        Level: lvl,
-        ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
-            if a.Key == slog.TimeKey {
-                a.Value = slog.StringValue(a.Value.Time().UTC().Format(time.RFC3339Nano))
-            }
-            return a
-        },
-    }))
-}
-
-// Context-aware logging — always pass logger via context for correlation
-func LoggerFromContext(ctx context.Context) *slog.Logger {
-    if logger, ok := ctx.Value(loggerKey{}).(*slog.Logger); ok {
-        return logger
-    }
-    return slog.Default()
-}
-
-// HTTP middleware: inject request context into logger
-func LoggingMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
-    return func(next http.Handler) http.Handler {
-        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-            requestID := r.Header.Get("X-Request-ID")
-            if requestID == "" {
-                requestID = uuid.New().String()
-            }
-
-            traceID := trace.SpanFromContext(r.Context()).SpanContext().TraceID().String()
-
-            reqLogger := logger.With(
-                "request_id", requestID,
-                "trace_id", traceID,
-                "method", r.Method,
-                "path", r.URL.Path,
-                "remote_addr", r.RemoteAddr,
-            )
-
-            ctx := context.WithValue(r.Context(), loggerKey{}, reqLogger)
-            w.Header().Set("X-Request-ID", requestID)
-
-            start := time.Now()
-            ww := newResponseWriter(w)
-            next.ServeHTTP(ww, r.WithContext(ctx))
-
-            reqLogger.Info("request completed",
-                "status", ww.status,
-                "duration_ms", time.Since(start).Milliseconds(),
-                "bytes", ww.bytes,
-            )
-        })
-    }
-}
-```
-
-## Prometheus Metrics Pattern
-
-```go
-// internal/infrastructure/metrics/metrics.go
-var (
-    HTTPRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-        Name: "http_requests_total",
-        Help: "Total HTTP requests by method, path, and status",
-    }, []string{"method", "path", "status"})
-
-    HTTPRequestDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-        Name:    "http_request_duration_seconds",
-        Help:    "HTTP request duration in seconds",
-        Buckets: []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10},
-    }, []string{"method", "path"})
-
-    DBQueryDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
-        Name:    "db_query_duration_seconds",
-        Help:    "Database query duration in seconds",
-        Buckets: []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1},
-    }, []string{"operation", "table"})
-
-    ActiveConnections = prometheus.NewGauge(prometheus.GaugeOpts{
-        Name: "active_connections",
-        Help: "Currently active connections",
-    })
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
 )
-
-func Register(reg prometheus.Registerer) {
-    reg.MustRegister(HTTPRequestsTotal, HTTPRequestDuration, DBQueryDuration, ActiveConnections)
-}
+logger = logging.getLogger(__name__)
 ```
 
-## OpenTelemetry Tracing Setup
-
-```go
-// internal/infrastructure/tracing/tracing.go
-func InitTracer(ctx context.Context, cfg TracingConfig) (func(context.Context) error, error) {
-    exporter, err := otlptracehttp.New(ctx,
-        otlptracehttp.WithEndpoint(cfg.Endpoint),
-        otlptracehttp.WithInsecure(),
-    )
-    if err != nil {
-        return nil, fmt.Errorf("creating OTLP exporter: %w", err)
-    }
-
-    tp := sdktrace.NewTracerProvider(
-        sdktrace.WithBatcher(exporter),
-        sdktrace.WithSampler(sdktrace.ParentBased(
-            sdktrace.TraceIDRatioBased(cfg.SampleRate), // e.g., 0.1 for 10%
-        )),
-        sdktrace.WithResource(resource.NewWithAttributes(
-            semconv.SchemaURL,
-            semconv.ServiceName(cfg.ServiceName),
-            semconv.ServiceVersion(cfg.Version),
-            semconv.DeploymentEnvironment(cfg.Environment),
-        )),
-    )
-
-    otel.SetTracerProvider(tp)
-    otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
-        propagation.TraceContext{},
-        propagation.Baggage{},
-    ))
-
-    return tp.Shutdown, nil
-}
-
-// Instrument a domain operation
-func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderRequest) (*Order, error) {
-    ctx, span := otel.Tracer("order-service").Start(ctx, "OrderService.CreateOrder")
-    defer span.End()
-
-    span.SetAttributes(
-        attribute.String("order.user_id", req.UserID),
-        attribute.Int("order.item_count", len(req.Items)),
-    )
-
-    order, err := s.repo.Save(ctx, order)
-    if err != nil {
-        span.RecordError(err)
-        span.SetStatus(codes.Error, err.Error())
-        return nil, err
-    }
-
-    span.SetAttributes(attribute.String("order.id", order.ID.String()))
-    return order, nil
-}
+Every module should declare its own logger:
+```python
+# In cto_agent.py
+logger = logging.getLogger(__name__)  # → "agents.cto_agent"
 ```
 
-## SLO Metrics to Track
+Log with context — include session_id and agent name in every significant log:
 
-```
-Availability SLO (99.9%):
-  - Alert when: http_requests_total{status=~"5.."} / http_requests_total > 0.001
+```python
+logger.info("CTOAgent processed message action=%s intent=%s session_id=%s",
+            decision.action, decision.intent, session_id)
 
-Latency SLO (p99 < 500ms):
-  - Alert when: histogram_quantile(0.99, http_request_duration_seconds) > 0.5
-
-Error budget burn rate:
-  - Alert when burn rate > 14.4x (1-hour window) indicating budget exhaustion in 5 days
+logger.error("research() failed topic=%r session_id=%s error=%s",
+             topic[:50], session_id, e)
 ```
 
-## Constraints
+## Log Levels
 
-- Log at INFO for normal operations, WARN for recoverable issues, ERROR for failures needing attention
-- Never log sensitive data: passwords, tokens, PII — log IDs instead
-- Trace sampling must be configured — 100% sampling in dev, 1-10% in production
-- All spans must have `span.End()` called — always defer it immediately after Start
-- Metrics cardinality must be controlled — never use user IDs, request IDs as label values
-- Correlation ID (trace_id + request_id) must appear in every log line and HTTP response header
+| Level | When to use |
+|---|---|
+| `DEBUG` | Per-request detail (LLM prompt/response content) — off in production |
+| `INFO` | Normal operations — action taken, decision made, job completed |
+| `WARNING` | Recoverable issues — Discord send failed, fallback provider used |
+| `ERROR` | Unexpected failures — LLM error, git commit failed, budget exceeded |
+| `CRITICAL` | Startup failures — missing token, failed DB init |
+
+Never log sensitive values (API keys, tokens, full user messages at INFO+).
+
+## Cost Tracking
+
+NanoClaw tracks per-call LLM costs in `memory/costs.db` (SQLite) via `CostTracker`. Every LLM response returns `tokens_in`, `tokens_out`, `cost_usd`. Always persist it:
+
+```python
+# In every agent method that calls router.route():
+response = await self.router.route(task_type=..., messages=..., session_id=..., agent=self.name)
+await self.memory.save_message(
+    role=self.name,
+    agent=self.name,
+    content=response.content,
+    task_id=None,
+    model=response.model,
+    tokens_in=response.tokens_in,
+    tokens_out=response.tokens_out,
+    cost_usd=response.cost_usd,
+)
+```
+
+## Session Correlation
+
+Every `process()` call receives a `session_id`. Pass it through to all downstream calls:
+- `router.route(session_id=session_id, ...)`
+- `memory.save_message(...)` (implicitly via `session_id` in messages table)
+- Include in log messages for grep-ability
+
+## Discord Log Channel
+
+Important events are sent to the Discord log channel (`settings.discord.log_channel_id`). Use for:
+- Job completion/failure summaries
+- Budget alerts
+- System errors that need human attention
+
+```python
+async def _log_to_discord(self, message: str) -> None:
+    channel = self.client.get_channel(int(self.settings.discord.log_channel_id))
+    if channel:
+        try:
+            await channel.send(message)
+        except discord.HTTPException as e:
+            logger.warning("Failed to post to log channel: %s", e)
+```
+
+## Health Metrics (Simple)
+
+NanoClaw doesn't use Prometheus. Surface health through the `status` Discord command:
+
+```python
+# In orchestrator.py or bot.py:
+status_msg = (
+    f"Queue depth: {self.job_queue.size()}\n"
+    f"Tasks: {self.task_store.summary()}\n"
+    f"Today's spend: ${self.cost_tracker.today_total():.4f}"
+)
+```
+
+## Error Surfacing Pattern
+
+Errors should surface at multiple levels:
+1. **Logger** — always log at ERROR level with context
+2. **Discord (user)** — send user-friendly message if caused by user request
+3. **Discord (log channel)** — send technical summary for ops monitoring
+
+```python
+except Exception as e:
+    logger.error("Job %s failed: %s", job.id, e, exc_info=True)
+    await target_channel.send(f"⚠️ Job failed: {e}")
+    await self._log_to_discord(f"[ERROR] Job {job.id} failed:\n```{e}```")
+```
+
+## Testing Observability
+
+Verify log calls and cost persistence in tests:
+
+```python
+@pytest.mark.asyncio
+async def test_research_saves_cost(agent, mock_router, mock_memory):
+    mock_router.route.return_value = mock_response("content", cost_usd=0.01)
+    await agent.research("topic", "Title", "session-1")
+    mock_memory.save_message.assert_called_once()
+    call_kwargs = mock_memory.save_message.call_args.kwargs
+    assert call_kwargs["cost_usd"] == 0.01
+```
+
+## What NOT to Add
+
+- No OpenTelemetry / distributed tracing — single process, not needed
+- No Prometheus metrics endpoint — no HTTP server
+- No Grafana / Loki — simple Docker deployment, stdout logs are sufficient
+- No structured JSON logging library (structlog, etc.) — stdlib logging is enough

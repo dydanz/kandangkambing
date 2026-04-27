@@ -1,20 +1,21 @@
 # /analyze-codebase
 
-Analyzes the codebase to understand its current structure, patterns, dependencies, and technical health. Use this as the starting point before planning any feature or refactor.
+Analyzes the NanoClaw codebase to understand its structure, patterns, and health. Use before planning any feature or refactor.
 
 ## When Invoked
 
-If no specific focus area is provided, present the following menu:
+If no specific focus area is provided, present:
 
 ```
 What would you like to analyze?
 
-1. Full codebase overview (architecture, structure, dependencies)
-2. Frontend architecture (components, state, data fetching)
-3. Backend architecture (Go packages, interfaces, patterns)
-4. Infrastructure (Terraform, K8s manifests)
-5. Testing coverage and gaps
-6. Specific feature or module: [provide name]
+1. Full codebase overview (architecture, agents, data flows)
+2. Agent layer (BaseAgent pattern, decision types, LLM routing)
+3. Bot and orchestrator (Discord event wiring, command routing)
+4. Tools layer (GitTool, LLMRouter, BotRegistry, ClaudeCodeTool)
+5. Safety layer (Auth, RateLimiter, BudgetGuard)
+6. Tests (coverage, mock patterns, conftest fixtures)
+7. Specific module: [provide name]
 
 Reply with a number or describe what you'd like to understand.
 ```
@@ -23,83 +24,72 @@ Reply with a number or describe what you'd like to understand.
 
 ### Step 1: Discovery
 
-Spawn parallel sub-agents to locate and understand different parts of the codebase:
+Read key entry points first:
+- `nanoclaw/bot.py` — Discord client, event wiring, BotRegistry
+- `nanoclaw/orchestrator.py` — command routing
+- `nanoclaw/agents/` — all agent files
+- `nanoclaw/config/settings.json` — LLM routing and channel config
+- `nanoclaw/tests/conftest.py` — SAMPLE_SETTINGS and fixtures
 
-**Frontend Discovery:**
-- Locate package.json, tsconfig.json, framework config files
-- Map the `src/` directory structure
-- Identify state management (Redux, Zustand, Context usage)
-- Find API client patterns
-- Count component files and identify shared vs feature-specific
-
-**Backend Discovery:**
-- Locate go.mod, identify Go version and key dependencies
-- Map the package structure (cmd/, internal/, pkg/)
-- Identify main entry points
-- Find interface definitions (ports)
-- Identify database layer (ORM, raw SQL, migrations)
-
-**Infrastructure Discovery:**
-- Locate Terraform files, identify modules and environments
-- Find Kubernetes manifests or Helm charts
-- Identify CI/CD pipeline files
-- Note cloud provider and key services
+Use `git log --name-only -20` to identify the most recently changed files.
 
 ### Step 2: Pattern Analysis
 
 For each discovered component:
-- Identify the architectural pattern in use
-- Note deviations from the pattern (inconsistencies)
-- Identify technical debt (TODO comments, deprecated patterns)
-- Note missing standard components (no tests, no error handling, no logging)
+- Is it following the BaseAgent pattern? (subclass, frozen dataclass decision, async process())
+- Does it have corresponding tests?
+- Are LLM calls going through LLMRouter (not direct SDK calls)?
+- Is the routing key registered in settings.json AND conftest.py?
 
 ### Step 3: Synthesis
 
-Produce a structured analysis report:
+Produce a structured analysis:
 
 ```markdown
-## Codebase Analysis: [Project Name]
+## Codebase Analysis: NanoClaw
 Date: YYYY-MM-DD
 Commit: [current git hash]
 
 ### Architecture Summary
-[2-3 sentence overview of the overall system design]
+[2-3 sentence overview]
 
-### Frontend
-- Framework: [framework + version]
-- Structure: [feature-based / component-based / mixed]
-- State management: [tools used]
-- Key observations: [3-5 bullet points with file:line references]
-- Gaps/Concerns: [what's missing or inconsistent]
+### Agent Layer
+- Agents present: [list]
+- Decision types: [list]
+- LLM routing keys: [list — cross-check against settings.json]
+- Observations: [file:line references]
+- Gaps: [missing tests, missing routing keys, pattern deviations]
 
-### Backend
-- Language: Go [version]
-- Architecture: [clean arch / layered / flat]
-- Key patterns: [DI approach, error handling, logging]
-- Key observations: [3-5 bullet points with file:line references]
-- Gaps/Concerns: [missing patterns, inconsistencies]
+### Bot & Orchestrator
+- Discord clients: [CTO/PM/SED/QAD vs single bot]
+- Command routing: [how commands reach agents]
+- Observations: [file:line references]
 
-### Infrastructure
-- Cloud: [provider]
-- IaC: [Terraform / CDK / CloudFormation]
-- Container orchestration: [K8s version, approach]
-- Key observations: [3-5 bullet points]
+### Tools
+- GitTool: [push guard active? write_and_commit present?]
+- LLMRouter: [providers configured, fallback chain]
+- BotRegistry: [all 4 clients wired?]
 
-### Testing
+### Safety
+- Auth: [allowlist populated?]
+- BudgetGuard: [daily limit set?]
+- RateLimiter: [per-minute limit set?]
+
+### Tests
 - Coverage: [% if available]
-- Test types present: [unit / integration / E2E]
-- Key gaps: [what's not tested]
+- Mock pattern: [AsyncMock / MagicMock — consistent?]
+- SAMPLE_SETTINGS: [matches settings.json routing keys?]
+- Gaps: [untested agents, missing edge cases]
 
 ### Priority Recommendations
-1. [Most critical improvement]
+1. [Most critical gap]
 2. [Second priority]
 3. [Third priority]
 ```
 
-## Important Guidelines
+## Guidelines
 
-- Always reference specific file paths and line numbers in findings
-- Distinguish between "this is an intentional pattern" and "this looks like drift"
-- Do not change any code during analysis — this is read-only
-- If the codebase is large, analyze the most active packages first (git log --name-only)
-- Present the analysis as findings, not prescriptions — the team decides what to act on
+- Reference specific file paths and line numbers in findings
+- Cross-check `config/settings.json` routing keys against `tests/conftest.py:SAMPLE_SETTINGS`
+- Do not change any code during analysis — read-only
+- Flag any place where agent code calls an LLM SDK directly (bypassing LLMRouter)

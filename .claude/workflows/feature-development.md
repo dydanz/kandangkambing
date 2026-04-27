@@ -1,177 +1,114 @@
 # Workflow: Feature Development Lifecycle
 
-The day-to-day development cycle for implementing a feature once the PRD and TDD are approved.
+The day-to-day cycle for implementing a NanoClaw feature once the spec is approved.
 
 ## Overview
 
 ```
-TDD Approved → Branch → Implement → Test → Review → Merge → Deploy Dev
+Spec Approved → Branch (worktree) → Implement (TDD) → Test → Review → PR → Merge
 ```
 
 ## Prerequisites
 
-Before starting implementation — **no code written until all boxes are checked:**
-- [ ] PRD is approved (`.claude/thoughts/prd/`)
-- [ ] TRD is approved (`.claude/thoughts/trd/`) — generated from `templates/trd-template.md`
-- [ ] TRD Open Questions section is empty (all resolved before approval)
-- [ ] Feature is broken into implementation tasks (via `/plan-feature`)
-- [ ] All NFR targets in TRD are measurable numbers (not qualitative descriptions)
+Before writing any code:
+- [ ] Design spec written and approved in `docs/specs/YYYY-MM-DD-[feature]-design.md`
+- [ ] Implementation plan written in `docs/superpowers/plans/YYYY-MM-DD-[feature].md`
+- [ ] Git worktree created (use `superpowers:using-git-worktrees`)
 
 ## Step 1: Branch Setup
 
 ```bash
-# Create feature branch from main
-git checkout main && git pull
-git checkout -b feature/[ticket-id]-[brief-description]
-
-# Example:
-git checkout -b feature/ENG-123-user-profile-editing
+# Create a worktree for isolated development
+git worktree add .worktrees/feat-[name] -b feat/[name]
+cd .worktrees/feat-[name]/nanoclaw
+pip install -r requirements.txt
+python -m pytest tests/ -v   # verify baseline passes
 ```
 
-## Step 2: Backend Implementation (Go)
+## Step 2: Implement Following NanoClaw Patterns
 
-**Order matters — follow dependency direction:**
+**Order for new agents:**
+1. Add routing key to `config/settings.json`, `config/settings.docker.json`, `tests/conftest.py:SAMPLE_SETTINGS`
+2. Write frozen dataclass `{Name}Decision` in `agents/{name}_agent.py`
+3. Write failing unit tests in `tests/test_{name}_agent.py`
+4. Implement `BaseAgent` subclass with `async def process()`
+5. Add prompt in `config/prompts/{name}_prompt.md`
+6. Wire into `bot.py` and `orchestrator.py`
+7. Add bot-level integration tests
 
-```
-1. Domain layer (no external dependencies)
-   - Entity definitions (domain/[entity]/entity.go)
-   - Domain service interface (domain/[entity]/service.go)
-   - Repository interface (domain/[entity]/repository.go)
-   - Domain errors (domain/[entity]/errors.go)
-
-2. Infrastructure adapters
-   - DB repository implementation (infrastructure/persistence/[entity]_repo.go)
-   - Migrations (infrastructure/persistence/migrations/)
-   - External API clients (if needed)
-
-3. Application layer
-   - Use case handler (application/[usecase]/handler.go)
-   - DTOs (application/[usecase]/dto.go)
-
-4. HTTP layer (thin — just wire and serialize)
-   - HTTP handler (infrastructure/http/handler/[entity]_handler.go)
-   - Route registration
-
-5. Tests (write alongside each layer)
-   - Unit tests for domain service
-   - Integration tests for repository
-   - HTTP handler tests
-```
+**Order for new tools:**
+1. Write failing tests for the tool
+2. Implement the tool class
+3. Inject into the relevant agent in `bot.py`
 
 **At each step:**
-- Run `go build ./...` to catch compilation errors
-- Run `go test -short ./...` to run fast tests
-- Run `go vet ./...` to catch common mistakes
-
-## Step 3: Frontend Implementation
-
-**Order matters — start from data, end at UI:**
-
-```
-1. API hooks (features/[name]/api/)
-   - Define types (matching backend API contract)
-   - Implement TanStack Query hooks
-   - Test with msw mock handlers
-
-2. State management (if needed)
-   - Zustand slice for UI state
-   - Not needed for server state (TanStack Query handles it)
-
-3. UI components (features/[name]/components/)
-   - Start with the main component
-   - Add loading state (skeleton)
-   - Add error state (error boundary or inline error)
-   - Add empty state
-
-4. Page integration (app/routes/ or pages/)
-   - Wire components to routing
-   - Add page-level tests
-
-5. E2E test
-   - Happy path test
-   - Key error path test
+```bash
+python -m pytest tests/ -v --tb=short   # run full suite after each change
+ruff check nanoclaw/                    # check for lint errors
 ```
 
-**At each step:**
-- Run `pnpm typecheck` to catch type errors
-- Run `pnpm test:unit --run` to run fast tests
-- Preview in browser with real API or msw mocks
+## Step 3: Self-Review Checklist
 
-## Step 4: Self-Review Checklist
-
-Before requesting a code review:
+Before opening a PR:
 
 ```
-Backend:
-  [ ] `go test -race ./...` passes
-  [ ] `golangci-lint run ./...` passes (zero warnings)
-  [ ] `go vet ./...` passes
-  [ ] New code has unit tests
-  [ ] New DB queries have integration tests
-  [ ] Error paths are tested
-  [ ] No sensitive data in logs
-  [ ] Context is propagated through all calls
-  [ ] Graceful shutdown not broken
+Agent/Tool:
+  [ ] All new methods are async def
+  [ ] LLM calls go through self.router.route() — no direct SDK calls
+  [ ] New routing keys are in settings.json AND conftest.py:SAMPLE_SETTINGS
+  [ ] Decision dataclass is frozen=True
+  [ ] Fallback decision defined for LLM call failures
+  [ ] Memory writes go through self.memory.save_message()
 
-Frontend:
-  [ ] `pnpm typecheck` passes (zero errors)
-  [ ] `pnpm test:unit --run` passes
-  [ ] Mobile view looks correct (check at 375px)
-  [ ] Loading state is implemented
-  [ ] Error state is implemented
-  [ ] Empty state is implemented
-  [ ] Accessibility: keyboard navigation works
+Tests:
+  [ ] pytest tests/ -v — all pass
+  [ ] pytest tests/ --cov=. --cov-fail-under=70 — coverage gate holds
+  [ ] New agent has unit tests for all decision action types
+  [ ] New integration tests for bot._handle_message() path
 
 General:
-  [ ] No TODO comments (convert to tickets)
-  [ ] No debug logs or console.log left in
-  [ ] Environment variables documented
-  [ ] PR description explains the change clearly
+  [ ] No debug prints left in code
+  [ ] No TODO comments (convert to GitHub issues)
+  [ ] No secrets in committed code
+  [ ] PR description explains the why, not just the what
 ```
 
-## Step 5: Code Review
+## Step 4: Code Review
 
 Invoke `/review-code` for a self-review, then request team review.
 
-**PR description template:**
+**PR description format:**
 ```markdown
 ## What
-[What change was made]
+[What was added or changed]
 
 ## Why
-[Why this change was needed — link to PRD/ticket]
+[Link to spec or describe the motivation]
 
 ## How
-[Key technical decisions made]
+[Key technical decisions]
 
 ## Testing
-[How to test this manually]
+[How to test manually — which Discord command to run]
 
 ## Checklist
 - [ ] Tests added/updated
-- [ ] No breaking changes (or migration documented)
-- [ ] Docs updated (if applicable)
+- [ ] Routing keys added to all config files
+- [ ] No breaking changes to existing agents
 ```
 
-## Step 6: Merge and Observe
+## Step 5: Merge and Verify
 
 After merging to main:
 1. CI runs automatically → wait for green
-2. GitOps updates dev environment within 5-10 minutes
-3. Check Grafana dashboard for dev environment
-4. Verify feature works in dev environment
-5. If any error spike: investigate immediately (don't wait for reports)
+2. If deploying: `docker compose pull && docker compose up -d`
+3. Send `@CTO status` in Discord → verify response
+4. Check `docker compose logs nanoclaw` for errors
 
 ## Handling Blockers
 
 If you hit a blocker:
 1. Document the specific obstacle clearly
-2. Check `.claude/learnings.md` for related past discoveries
-3. Use `/analyze-codebase` to understand the affected area
-4. Ask for help early — don't spend > 2 hours blocked without asking
-
-If the TRD is wrong or incomplete (discovered during implementation):
-1. Do NOT silently deviate — stop implementation immediately
-2. Update the TRD first (`.claude/thoughts/trd/`)
-3. Get tech lead re-approval on the changed sections
-4. Update the implementation plan if scope changed, then continue
+2. Check `.claude/learnings.md` for related past findings
+3. Use `/analyze-codebase` to understand the affected module
+4. If the spec is wrong or incomplete: stop, update the spec, get approval, then continue

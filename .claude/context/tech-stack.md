@@ -1,124 +1,111 @@
 ---
 name: tech-stack
-description: Detailed technology choices, versions, and conventions for each layer of the stack
+description: NanoClaw technology choices, versions, and conventions for every layer of the stack.
 type: reference
 ---
 
-# Technology Stack Reference
+# NanoClaw Technology Stack
 
-## Frontend
+## Core Runtime
 
-### Core
 | Technology | Version | Purpose |
-|-----------|---------|---------|
-| Next.js | 15.x | React framework (App Router) |
-| React | 19.x | UI library |
-| TypeScript | 5.x | Type safety |
+|---|---|---|
+| Python | 3.11+ | Application language |
+| discord.py | 2.x | Discord bot framework (async WebSocket) |
+| asyncio | stdlib | Concurrency model |
 
-### Styling
+## LLM Integration
+
 | Technology | Version | Purpose |
-|-----------|---------|---------|
-| Tailwind CSS | 3.x | Utility-first CSS |
-| shadcn/ui | latest | Accessible component library |
+|---|---|---|
+| anthropic | latest | Anthropic SDK (Claude) |
+| openai | latest | OpenAI SDK (fallback) |
+| google-generativeai | latest | Google SDK (fallback) |
 
-### State & Data
+LLM calls go through `tools/llm_router.py` — task-type-based routing with fallback chain. Never call provider SDKs directly from agents.
+
+**Routing keys** (defined in `config/settings.json` `llm.routing`):
+| Key | Default model | Used for |
+|---|---|---|
+| `classify` | claude-haiku-4-5 | CTOAgent intent classification |
+| `implement` | claude-sonnet-4-6 | DevAgent code generation |
+| `research` | claude-sonnet-4-6 | CTOAgent deep research/docs |
+| `qa` | claude-haiku-4-5 | QAAgent test analysis |
+
+## Configuration
+
 | Technology | Version | Purpose |
-|-----------|---------|---------|
-| TanStack Query | 5.x | Server state, caching, data fetching |
-| Zustand | 4.x | Global client state |
-| React Hook Form | 7.x | Form state management |
-| Zod | 3.x | Schema validation |
+|---|---|---|
+| Pydantic | v2 | Settings validation (`config/settings.py`) |
+| python-dotenv | latest | `.env` loading |
 
-### Testing
+Settings files: `config/settings.json` (local), `config/settings.docker.json` (Docker).
+
+## Storage
+
 | Technology | Version | Purpose |
-|-----------|---------|---------|
-| Vitest | latest | Unit & integration test runner |
-| @testing-library/react | latest | Component testing |
-| msw | 2.x | API mocking at network level |
-| Playwright | latest | E2E browser testing |
+|---|---|---|
+| sqlite3 | stdlib | SharedMemory (messages, costs) |
+| JSON files | — | TaskStore (`memory/tasks.json`) |
 
-## Backend (Go)
+No ORM. `SharedMemory` uses raw `sqlite3`. `TaskStore` reads/writes JSON directly.
 
-### Core
+## Git & GitHub
+
 | Technology | Version | Purpose |
-|-----------|---------|---------|
-| Go | 1.23+ | Application language |
-| chi | 5.x | HTTP router (lightweight, idiomatic) |
-| pgx | 5.x | PostgreSQL driver |
-| sqlc | 2.x | Type-safe SQL query generation |
-| golang-migrate | 4.x | Database migrations |
+|---|---|---|
+| GitPython | 3.x | Git operations (worktrees, commits, push) |
+| gh CLI | latest | PR creation (subprocess call) |
+| claude CLI | latest | Code implementation (subprocess call) |
 
-### Observability
+## Testing
+
 | Technology | Version | Purpose |
-|-----------|---------|---------|
-| slog | stdlib | Structured logging |
-| OpenTelemetry | latest | Distributed tracing |
-| prometheus/client_golang | 1.x | Metrics exposition |
+|---|---|---|
+| pytest | 8.x | Test runner |
+| pytest-asyncio | 0.23+ | Async test support |
+| pytest-cov | 5.x | Coverage reporting |
+| unittest.mock | stdlib | AsyncMock, MagicMock, patch |
 
-### Testing
+No Testcontainers, no real database in tests. SQLite runs in-memory or tmp dirs.
+
+## Linting & Formatting
+
 | Technology | Version | Purpose |
-|-----------|---------|---------|
-| testify | 1.x | Assertions and test suites |
-| gomock | 0.x | Interface mocking |
-| testcontainers-go | 0.x | Real DB in integration tests |
+|---|---|---|
+| ruff | latest | Linting + formatting (replaces flake8/black/isort) |
 
-### Code Quality
+## Deployment
+
 | Technology | Version | Purpose |
-|-----------|---------|---------|
-| golangci-lint | 1.62+ | Linting (multi-linter) |
-| govulncheck | latest | Vulnerability scanning |
+|---|---|---|
+| Docker | 24+ | Container build |
+| docker-compose | 2.x | Single-container deployment |
 
-## Infrastructure
+No Kubernetes, no Terraform, no cloud infrastructure.
 
-### Cloud
+## CI/CD
+
 | Technology | Version | Purpose |
-|-----------|---------|---------|
-| AWS | — | Primary cloud provider |
-| Terraform | 1.9+ | Infrastructure as Code |
-| AWS Provider | 5.x | Terraform AWS resources |
+|---|---|---|
+| GitHub Actions | — | CI pipeline (lint + test + build) |
+| GHCR | — | Container registry |
 
-### Kubernetes
-| Technology | Version | Purpose |
-|-----------|---------|---------|
-| EKS | 1.31 | Managed Kubernetes |
-| Flux | 2.x | GitOps reconciliation |
-| NGINX Ingress | 1.x | Ingress controller |
-| cert-manager | 1.x | TLS certificate automation |
-| External Secrets Operator | 0.x | Secret sync from AWS |
-| External DNS | 0.x | DNS sync from Ingress |
+## Python Conventions
 
-### Observability Stack
-| Technology | Version | Purpose |
-|-----------|---------|---------|
-| Prometheus | 2.x | Metrics collection & alerting |
-| Grafana | 10.x | Dashboards & visualization |
-| Loki | 3.x | Log aggregation |
-| Tempo | 2.x | Distributed tracing storage |
-| Alertmanager | 0.x | Alert routing |
+- Module names: `snake_case.py`
+- Class names: `PascalCase`
+- Constants: `UPPER_SNAKE_CASE`
+- Private methods: `_leading_underscore`
+- All agent methods: `async def` (asyncio event loop)
+- Error handling: `logger.error("context: %s", e)` — include context, don't just log `e`
+- Type hints: required for function signatures, optional for local variables
 
-## Conventions
+## Git Conventions
 
-### Go
-- Package naming: `lowercase`, no underscores except `_test`
-- Error handling: always wrap with context using `fmt.Errorf("context: %w", err)`
-- Testing: table-driven tests with `t.Run()` subtests
-- Imports: stdlib first, then external, then internal (separated by blank lines)
-
-### TypeScript/React
-- Component naming: `PascalCase`
-- Hook naming: `camelCase` with `use` prefix
-- File naming: `kebab-case.tsx` for components, `camelCase.ts` for utilities
-- Exports: named exports preferred over default exports (better refactor support)
-
-### Git
-- Branch naming: `feature/[ticket]-description`, `fix/[ticket]-description`, `chore/description`
+- Branch naming: `feature/[description]`, `fix/[description]`, `chore/[description]`
 - Commit format: `type(scope): description` (conventional commits)
-  - Types: feat, fix, chore, docs, style, refactor, test, perf
-- PR size: ideally < 400 lines changed — split larger changes
-
-### Database
-- Migration naming: `YYYYMMDDHHMMSS_description.sql`
-- All migrations must be reversible (include down migration)
-- Column naming: `snake_case`
-- Boolean columns: `is_`, `has_`, `can_` prefix
-- Timestamps: `created_at`, `updated_at` on all tables (TIMESTAMPTZ)
+  - Types: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`
+- PR size: < 400 lines preferred — split larger changes
+- Never commit `.env` or secrets
+- Feature branches only — never push to `main`/`master` directly

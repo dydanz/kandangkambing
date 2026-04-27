@@ -1,95 +1,117 @@
 ---
 name: project-overview
-description: High-level project context — what we're building, why, tech stack, and team structure. Update this as the project evolves.
+description: NanoClaw project context — what it is, stack, architecture, entry points, and key data flows. Load this in every session.
 type: reference
 ---
 
-# Project Overview
+# NanoClaw — Project Overview
 
-> **Update this file** as the project takes shape. This is the first context loaded in every session.
+## What It Is
 
-## What We're Building
+NanoClaw is a Discord bot that orchestrates a multi-agent AI system (PM → Dev → QA → CTO) to autonomously plan and implement software features. Users issue natural-language commands in Discord; the bot creates git worktrees, runs the `claude` CLI for implementation, and opens GitHub PRs.
 
-[Describe the application: purpose, target users, core value proposition]
+**Users:** Developers who want AI-assisted feature development via Discord.
 
-## Tech Stack
+**Core value:** Type a feature request in Discord → get a PR opened with code, tests, and CI within minutes.
 
-### Frontend
-- Framework: [e.g., Next.js 15, React 19]
-- Language: TypeScript
-- Styling: [e.g., Tailwind CSS, shadcn/ui]
-- State: [e.g., TanStack Query + Zustand]
-- Testing: Vitest + Playwright
+## Architecture
 
-### Backend
-- Language: Go [version]
-- Architecture: Clean Architecture (hexagonal)
-- Database: [e.g., PostgreSQL 16]
-- Cache: [e.g., Redis 7]
-- Messaging: [e.g., Kafka, RabbitMQ, or N/A]
-
-### Infrastructure
-- Cloud: AWS
-- Container orchestration: Kubernetes (EKS)
-- IaC: Terraform
-- GitOps: Flux
-- CI/CD: GitHub Actions
-
-## Environments
-
-| Environment | URL | AWS Account | Notes |
-|-------------|-----|-------------|-------|
-| Dev         | https://dev.example.com | [account-id] | Auto-deploy on merge |
-| Staging     | https://staging.example.com | [account-id] | Deploy via PR |
-| Production  | https://example.com | [account-id] | Manual approval |
-
-## Team Structure
-
-| Role | Name | Domain |
-|------|------|--------|
-| Product Manager | [Name] | Requirements, PRD |
-| Tech Lead | [Name] | Architecture, review |
-| Backend | [Names] | Go services |
-| Frontend | [Names] | React/Next.js |
-| Platform | [Names] | Infrastructure, CI/CD |
-
-## Key Decisions (ADRs)
-
-| Decision | Choice | Date | Rationale |
-|----------|--------|------|-----------|
-| [e.g., State management] | [Zustand + TanStack Query] | YYYY-MM-DD | [Brief reason] |
-| [e.g., Go web framework] | [chi / echo / gin] | YYYY-MM-DD | [Brief reason] |
+```
+Discord (user mentions @CTO)
+    ↓
+bot.py — CTO Discord client (listener), event wiring, BotRegistry
+    ↓
+CTOAgent.process() — Haiku classifies intent → CTODecision
+    ↓
+┌─ action="execute"  → Orchestrator.handle()
+│       ↓
+│   WorkflowEngine → PMAgent → DevAgent → QAAgent
+│       ↓              ↓           ↓          ↓
+│   JobQueue      PM Discord   SED Discord  QAD Discord
+│
+├─ action="respond"  → CTO Discord client sends inline answer
+├─ action="clarify"  → CTO Discord client asks question
+└─ action="document" → CTO researches (Sonnet) → posts markdown → optional git commit
+```
 
 ## Repository Structure
 
 ```
-[project-root]/
-├── frontend/        # Next.js / React application
-├── backend/         # Go services
-├── infrastructure/  # Terraform + K8s manifests
-├── k8s-gitops/      # GitOps repository (or subfolder)
-└── .claude/         # Claude Code configuration
+kandangkambing/
+  nanoclaw/
+    bot.py              # Entry point — Discord client, event wiring
+    orchestrator.py     # Command parsing and routing
+    agents/             # PM, Dev, QA, CTO agents (all subclass BaseAgent)
+    workflow/           # WorkflowEngine, ApprovalGate, JobQueue
+    tools/              # ClaudeCodeTool, GitTool, LLMRouter, BotRegistry
+    memory/             # SharedMemory (SQLite), TaskStore (JSON), CostTracker
+    safety/             # Auth, RateLimiter, BudgetGuard, DailyScheduler
+    config/             # Settings (Pydantic), routing config, prompts/
+    tests/              # pytest + pytest-asyncio, all mocked
+  docs/
+    specs/              # Design specs (approved before implementation)
+    superpowers/plans/  # Implementation plans
+    research/           # CTO-generated research docs
+  .claude/              # Claude Code configuration
 ```
+
+## Key Data Flows
+
+| Command | Flow |
+|---|---|
+| `@CTO PM define <instruction>` | PMAgent creates spec + tasks in `memory/tasks.json` |
+| `@CTO Dev implement <task_id>` | DevAgent creates worktree → ClaudeCodeTool → QAAgent → push → PR |
+| `@CTO feature <instruction>` | Shorthand for PM define |
+| `@CTO status` | Returns queue depth, task counts, today's spend |
+| `@CTO research <topic>` | CTOAgent → research() via Sonnet → markdown doc |
+
+## Discord Bot Identities
+
+| Bot | Token Env Var | Role |
+|---|---|---|
+| CTO | `DISCORD_CTO_TOKEN` | Listener + analysis responses |
+| PMO | `DISCORD_PMO_TOKEN` | Planning output |
+| SED | `DISCORD_SED_TOKEN` | Dev/implementation updates |
+| QAD | `DISCORD_QAD_TOKEN` | QA + code review results |
+| NanoClaw (legacy) | `DISCORD_BOT_TOKEN` | Fallback |
 
 ## Development Setup
 
 ```bash
-# Prerequisites
-# - Go [version]+
-# - Node.js [version]+
-# - Docker + Docker Compose
-# - kubectl + helm
-
-# Start local development
-docker compose up -d    # Start backing services (DB, Redis, etc.)
-make run-backend        # Start Go server
-cd frontend && npm dev  # Start frontend dev server
+cd nanoclaw
+pip install -r requirements.txt
+cp .env.example .env   # fill in tokens and API keys
+# Edit config/settings.json with your Discord channel IDs and project path
+python bot.py
 ```
 
-## Key Links
+## Docker Setup
 
-- Figma / Design: [URL]
-- Linear / Jira: [URL]
-- Notion / Confluence: [URL]
-- Grafana Dashboard: [URL]
-- Staging environment: [URL]
+```bash
+cd nanoclaw
+cp .env.example .env
+# Edit config/settings.docker.json (use /workspace/ paths)
+docker compose up -d
+```
+
+## Running Tests
+
+```bash
+cd nanoclaw
+python -m pytest tests/ -v
+```
+
+All tests are mocked — no live API keys needed.
+
+## Key Constraints
+
+- Never push to `main`/`master` — `GitTool.push()` raises if attempted
+- All feature work happens in git worktrees (`worktree_base` directory)
+- `claude` CLI must be on PATH (used by ClaudeCodeTool)
+- `gh` CLI must be authenticated (used for PR creation)
+- SQLite files are relative to CWD — run `bot.py` from inside `nanoclaw/`
+- Rate limits and budget guards enforced before every LLM call
+
+## Team
+
+Solo project — Dandi Diputra (dandidiputra@gmail.com).
